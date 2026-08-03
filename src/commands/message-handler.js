@@ -87,7 +87,8 @@ function createMessageHandler({ allocationService, categoryRepository, pool, isA
       }
       if (['groupid', 'stock', 'status'].includes(command.name)) {
         const adminSender = await resolveSender(message);
-        if (!isAdmin(adminSender)) {
+        const allowed = await Promise.resolve(isAdmin(adminSender));
+        if (!allowed) {
           await message.reply('❌ This command is restricted to administrators.'); return;
         }
       }

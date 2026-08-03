@@ -6,6 +6,7 @@ const { requireAuth, ensureCsrf, verifyCsrf, safeEqual } = require('../middlewar
 const { escapeHtml, layout } = require('../utilities/html');
 const { maskCode } = require('../utilities/mask');
 const { importCodeLines } = require('../services/code-importer');
+const { AdminRepository } = require('../services/admin-repository');
 
 function table(headers, rows, className = '') {
   return `<div class="table-wrap ${escapeHtml(className)}"><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${headers.length}" class="empty-state">No records found</td></tr>`}</tbody></table></div>`;
@@ -31,12 +32,35 @@ function pagination(path, query, page, hasNext) {
   return links.length ? `<nav class="pagination" aria-label="Pagination">${links.join('')}</nav>` : '';
 }
 
+const CATEGORY_ORDER_EXPRESSION = `
+  CASE category
+    WHEN '830' THEN 1
+    WHEN '2320' THEN 2
+    WHEN '5150' THEN 3
+    WHEN '13k' THEN 4
+    WHEN '27k' THEN 5
+    WHEN '56k' THEN 6
+    ELSE 999
+  END`;
+
+const CATEGORY_ORDER_EXPRESSION_CC = `
+  CASE cc.category
+    WHEN '830' THEN 1
+    WHEN '2320' THEN 2
+    WHEN '5150' THEN 3
+    WHEN '13k' THEN 4
+    WHEN '27k' THEN 5
+    WHEN '56k' THEN 6
+    ELSE 999
+  END`;
+
 async function activeCategories(pool) {
-  return (await pool.query('SELECT category,display_name FROM code_categories WHERE active=TRUE ORDER BY category')).rows;
+  return (await pool.query(`SELECT category,display_name FROM code_categories WHERE active=TRUE ORDER BY ${CATEGORY_ORDER_EXPRESSION}`)).rows;
 }
 
 function createDashboardRouter({ pool, config }) {
   const router = express.Router();
+  const adminRepository = new AdminRepository(pool);
   router.use(ensureCsrf);
 
   router.get('/login', (req, res) => res.send(layout('Login', `<section class="card narrow login-card"><div class="eyebrow">SECURE NODE ACCESS</div><h1>Administrator login</h1><p class="muted">Authenticate to manage inventory and inspect the immutable event ledger.</p><form method="post" action="/login"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Username<input name="username" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button>Connect to dashboard</button></form></section>`)));
@@ -62,7 +86,7 @@ function createDashboardRouter({ pool, config }) {
           count(c.id) FILTER (WHERE c.status='used')::int used,
           count(c.id) FILTER (WHERE c.delivery_status='failed')::int failed
          FROM code_categories cc LEFT JOIN codes c ON c.category=cc.category
-         WHERE cc.active=TRUE GROUP BY cc.category,cc.display_name ORDER BY cc.category`
+         WHERE cc.active=TRUE GROUP BY cc.category,cc.display_name ORDER BY ${CATEGORY_ORDER_EXPRESSION_CC}`
       )).rows;
       const totals = inventory.reduce((result, row) => ({
         unused: result.unused + row.unused,
@@ -126,7 +150,73 @@ function createDashboardRouter({ pool, config }) {
     try {
       const groups = (await pool.query('SELECT * FROM allowed_groups ORDER BY group_name')).rows;
       const rows = groups.map((group) => `<tr><td>${escapeHtml(group.group_name)}</td><td><code>${escapeHtml(group.group_id)}</code></td><td>${badge(group.active ? 'active' : 'disabled')}</td><td><form method="post" action="/dashboard/groups/toggle"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}"><input type="hidden" name="active" value="${group.active ? 'false' : 'true'}"><button class="small-button ${group.active ? 'danger' : ''}">${group.active ? 'Disable' : 'Enable'}</button></form></td></tr>`);
-      res.send(layout('Groups', `<section class="hero compact"><div><div class="eyebrow">ACCESS CONTROL</div><h1>Authorized groups</h1><p>Only active groups can consume inventory.</p></div></section>${table(['Name','Group ID','State','Action'], rows)}`, req.session.csrfToken));
+      const addGroupForm = `
+        <section id="group-add" class="card narrow group-add-card">
+          <div class="eyebrow">REGISTER GROUP</div>
+          <h2>Add a new authorized group</h2>
+          <p class="muted">Enter the WhatsApp group ID and a display name. The group will be enabled automatically.</p>
+          <form method="post" action="/dashboard/groups/add">
+            <input type="hidden" name="_csrf" value="${req.session.csrfToken}">
+            <label>Group name<input name="group_name" required maxlength="100" placeholder="Customer group"></label>
+            <label>Group ID<input name="group_id" required maxlength="200" placeholder="120363...@g.us"></label>
+            <button type="submit">Add group</button>
+          </form>
+        </section>
+      `;
+      res.send(layout('Groups', `<section class="hero compact"><div><div class="eyebrow">ACCESS CONTROL</div><h1>Authorized groups</h1><p>Only active groups can consume inventory.</p></div><a href="#group-add" class="button">Add group</a></section>${addGroupForm}${table(['Name','Group ID','State','Action'], rows)}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.get('/dashboard/admins', async (req, res, next) => {
+    try {
+      const admins = await adminRepository.list();
+      const rows = admins.map((admin) => `<tr><td>${escapeHtml(admin.display_name || '—')}</td><td><code>${escapeHtml(admin.phone)}</code></td><td>${timestamp(admin.created_at)}</td><td>${timestamp(admin.updated_at)}</td><td><form method="post" action="/dashboard/admins/delete"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="phone" value="${escapeHtml(admin.phone)}"><button class="small-button danger">Delete</button></form></td></tr>`);
+      const form = `
+        <section class="card narrow admin-add-card">
+          <div class="eyebrow">ADMIN NUMBERS</div>
+          <h2>Add administrator</h2>
+          <p class="muted">Enter a WhatsApp admin phone number and optional label. This list controls /status, /stock, and /groupid access.</p>
+          <form method="post" action="/dashboard/admins/add">
+            <input type="hidden" name="_csrf" value="${req.session.csrfToken}">
+            <label>Display name<input name="display_name" maxlength="100" placeholder="Administrator"></label>
+            <label>Phone number<input name="phone" required maxlength="20" placeholder="923001234567"></label>
+            <button type="submit">Save admin</button>
+          </form>
+        </section>
+      `;
+      res.send(layout('Admin numbers', `<section class="hero compact"><div><div class="eyebrow">ADMIN CONTROL</div><h1>Administrator numbers</h1><p>Manage WhatsApp admin access from the dashboard.</p></div><a href="#admin-add" class="button">Add admin</a></section><section id="admin-add">${form}</section>${table(['Name','Phone','Created','Updated','Action'], rows)}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/admins/add', verifyCsrf, async (req, res, next) => {
+    try {
+      const displayName = String(req.body.display_name || '').trim();
+      const phone = String(req.body.phone || '').trim();
+      if (!phone) return res.status(400).send(layout('Invalid admin', `<section class="card narrow"><h1>Phone number is required</h1><a class="button" href="/dashboard/admins">Return</a></section>`, req.session.csrfToken));
+      await adminRepository.set(phone, displayName);
+      res.redirect('/dashboard/admins');
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/admins/delete', verifyCsrf, async (req, res, next) => {
+    try {
+      await adminRepository.delete(req.body.phone);
+      res.redirect('/dashboard/admins');
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/groups/add', verifyCsrf, async (req, res, next) => {
+    try {
+      const groupId = String(req.body.group_id || '').trim();
+      const groupName = String(req.body.group_name || '').trim();
+      if (!groupId || !groupName) return res.status(400).send(layout('Group add failed', `<section class="card narrow"><h1>Invalid group details</h1><p class="muted">Both group ID and name are required.</p><a class="button" href="/dashboard/groups">Return to groups</a></section>`, req.session.csrfToken));
+      await pool.query(
+        `INSERT INTO allowed_groups(group_id,group_name,active) VALUES($1,$2,TRUE)
+         ON CONFLICT(group_id) DO UPDATE SET group_name=EXCLUDED.group_name,active=TRUE,updated_at=NOW()`,
+        [groupId, groupName]
+      );
+      await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', ['group_registered', groupId]);
+      res.redirect('/dashboard/groups');
     } catch (error) { next(error); }
   });
 
