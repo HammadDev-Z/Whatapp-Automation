@@ -21,8 +21,14 @@ function loadConfig() {
     groupRateLimit: number('GROUP_RATE_LIMIT', 5),
     groupRateWindowMinutes: number('GROUP_RATE_WINDOW_MINUTES', 10),
     maxCsvSizeMb: number('MAX_CSV_SIZE_MB', 5),
+    maxCodesPerRequest: number('MAX_CODES_PER_REQUEST', 50),
+    tagResponseDelayMinSeconds: number('TAG_RESPONSE_DELAY_MIN_SECONDS', 5),
+    tagResponseDelayMaxSeconds: number('TAG_RESPONSE_DELAY_MAX_SECONDS', 10),
     reconnectDelayMs: number('WHATSAPP_RECONNECT_DELAY_MS', 10000)
   };
+  if (config.tagResponseDelayMaxSeconds < config.tagResponseDelayMinSeconds) {
+    throw new Error('TAG_RESPONSE_DELAY_MAX_SECONDS must be greater than or equal to TAG_RESPONSE_DELAY_MIN_SECONDS');
+  }
   if (config.env === 'production' && (!config.adminPassword || config.adminPassword.includes('replace-'))) {
     throw new Error('A strong ADMIN_PASSWORD is required in production');
   }

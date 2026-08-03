@@ -1,26 +1,179 @@
 'use strict';
-const express=require('express');
-const multer=require('multer');
-const crypto=require('node:crypto');
-const {requireAuth,ensureCsrf,verifyCsrf,safeEqual}=require('../middleware/security');
-const {escapeHtml,layout}=require('../utilities/html');
-const {maskCode}=require('../utilities/mask');
-const {importCsv}=require('../services/csv-importer');
-function table(headers,rows){return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')||`<tr><td colspan="${headers.length}">No records</td></tr>`}</tbody></table></div>`;}
-function createDashboardRouter({pool,config}){
- const router=express.Router();
- const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:config.maxCsvSizeMb*1024*1024,files:1},fileFilter:(_r,f,cb)=>cb(null,f.mimetype==='text/csv'||/\.csv$/i.test(f.originalname))});
- router.use(ensureCsrf);
- router.get('/login',(req,res)=>res.send(layout('Login',`<section class="card narrow"><h1>Administrator login</h1><form method="post" action="/login"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Username<input name="username" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button>Log in</button></form></section>`)));
- router.post('/login',verifyCsrf,(req,res)=>{if(safeEqual(req.body.username,config.adminUsername)&&safeEqual(req.body.password,config.adminPassword)){req.session.regenerate(e=>{if(e)return res.status(500).send('Login failed');req.session.authenticated=true;req.session.csrfToken=crypto.randomBytes(32).toString('hex');res.redirect('/dashboard');});}else res.status(401).send(layout('Login','<section class="card narrow"><h1>Login failed</h1><a href="/login">Try again</a></section>'));});
- router.post('/logout',requireAuth,verifyCsrf,(req,res)=>req.session.destroy(()=>res.redirect('/login')));
- router.use('/dashboard',requireAuth);
- router.get('/dashboard',async(req,res,next)=>{try{const result=await pool.query(`SELECT cc.category,count(c.id) FILTER (WHERE c.status='unused')::int unused,count(c.id) FILTER (WHERE c.status='used')::int used,count(c.id) FILTER (WHERE c.delivery_status='failed')::int failed FROM code_categories cc LEFT JOIN codes c ON c.category=cc.category WHERE cc.active=TRUE GROUP BY cc.category ORDER BY cc.category`);const rows=result.rows.map(r=>`<tr><td>${escapeHtml(r.category)}</td><td>${r.unused}</td><td>${r.used}</td><td>${r.failed}</td></tr>`);res.send(layout('Inventory',`<h1>Inventory</h1>${table(['Category','Unused','Used','Failed delivery'],rows)}<section class="card"><h2>Import CSV</h2><form method="post" action="/dashboard/import" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="file" name="csv" accept=".csv,text/csv" required><button>Import</button><small>Maximum ${config.maxCsvSizeMb} MB. Codes are never displayed here.</small></form></section>`,req.session.csrfToken));}catch(e){next(e);}});
- router.post('/dashboard/import',upload.single('csv'),verifyCsrf,async(req,res,next)=>{try{if(!req.file)return res.status(400).send('A valid CSV file is required');const r=await importCsv(pool,req.file.buffer.toString('utf8'));res.send(layout('Import result',`<section class="card"><h1>Import complete</h1><p>Imported: ${r.imported} &middot; Skipped: ${r.skipped} &middot; Failed: ${r.failed}</p><a href="/dashboard">Return</a></section>`,req.session.csrfToken));}catch(e){next(e);}});
- router.get('/dashboard/groups',async(req,res,next)=>{try{const groups=(await pool.query('SELECT * FROM allowed_groups ORDER BY group_name')).rows;const rows=groups.map(g=>`<tr><td>${escapeHtml(g.group_name)}</td><td><code>${escapeHtml(g.group_id)}</code></td><td>${g.active?'Active':'Disabled'}</td><td><form method="post" action="/dashboard/groups/toggle"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(g.group_id)}"><input type="hidden" name="active" value="${g.active?'false':'true'}"><button>${g.active?'Disable':'Enable'}</button></form></td></tr>`);res.send(layout('Groups',`<h1>Authorized groups</h1>${table(['Name','Group ID','Status','Action'],rows)}`,req.session.csrfToken));}catch(e){next(e);}});
- router.post('/dashboard/groups/toggle',verifyCsrf,async(req,res,next)=>{try{await pool.query('UPDATE allowed_groups SET active=$2,updated_at=NOW() WHERE group_id=$1',[req.body.group_id,req.body.active==='true']);res.redirect('/dashboard/groups');}catch(e){next(e);}});
- router.get('/dashboard/audit',async(req,res,next)=>{try{const where=[];const values=[];for(const [key,col] of [['category','a.category'],['group','a.group_id']])if(req.query[key]){values.push(req.query[key]);where.push(`${col}=$${values.length}`);}if(req.query.date){values.push(req.query.date);where.push(`a.created_at >= $${values.length}::date AND a.created_at < $${values.length}::date + interval '1 day'`);}const records=(await pool.query(`SELECT a.*,c.code FROM audit_logs a LEFT JOIN codes c ON c.id=a.code_id ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY a.created_at DESC LIMIT 500`,values)).rows;const rows=records.map(a=>`<tr><td>${escapeHtml(a.created_at.toISOString())}</td><td>${escapeHtml(a.action)}</td><td>${escapeHtml(a.category)}</td><td>${escapeHtml(a.group_id)}</td><td>${escapeHtml(maskCode(a.code))}</td><td>${escapeHtml(a.delivery_status)}</td><td>${escapeHtml(a.error_message)}</td></tr>`);const filters=`<form class="filters"><input name="category" placeholder="Category" value="${escapeHtml(req.query.category)}"><input name="group" placeholder="Group ID" value="${escapeHtml(req.query.group)}"><input type="date" name="date" value="${escapeHtml(req.query.date)}"><button>Filter</button></form>`;res.send(layout('Audit',`<h1>Audit history</h1>${filters}${table(['UTC time','Action','Category','Group','Code','Delivery','Error'],rows)}`,req.session.csrfToken));}catch(e){next(e);}});
- router.get('/dashboard/failed',async(req,res,next)=>{try{const records=(await pool.query("SELECT id,category,code,used_by_group,requested_by,used_at FROM codes WHERE delivery_status='failed' ORDER BY used_at DESC")).rows;const rows=records.map(c=>`<tr><td>${c.id}</td><td>${escapeHtml(c.category)}</td><td>${escapeHtml(maskCode(c.code))}</td><td>${escapeHtml(c.used_by_group)}</td><td>${escapeHtml(c.requested_by)}</td><td>${escapeHtml(c.used_at?.toISOString())}</td></tr>`);res.send(layout('Failed deliveries',`<h1>Failed deliveries</h1><p>Review manually. Codes remain used.</p>${table(['Reference','Category','Masked code','Group','Requester','UTC time'],rows)}`,req.session.csrfToken));}catch(e){next(e);}});
- return router;
+
+const express = require('express');
+const crypto = require('node:crypto');
+const { requireAuth, ensureCsrf, verifyCsrf, safeEqual } = require('../middleware/security');
+const { escapeHtml, layout } = require('../utilities/html');
+const { maskCode } = require('../utilities/mask');
+const { importCodeLines } = require('../services/code-importer');
+
+function table(headers, rows, className = '') {
+  return `<div class="table-wrap ${escapeHtml(className)}"><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${headers.length}" class="empty-state">No records found</td></tr>`}</tbody></table></div>`;
 }
-module.exports={createDashboardRouter};
+
+function badge(value, kind = '') {
+  return `<span class="badge ${escapeHtml(kind || String(value || '').toLowerCase())}">${escapeHtml(value || '—')}</span>`;
+}
+
+function timestamp(value) {
+  return value ? escapeHtml(value.toISOString()) : '<span class="muted">—</span>';
+}
+
+function pageNumber(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function pagination(path, query, page, hasNext) {
+  const links = [];
+  if (page > 1) links.push(`<a class="button secondary" href="${path}?${new URLSearchParams({ ...query, page: String(page - 1) })}">← Newer blocks</a>`);
+  if (hasNext) links.push(`<a class="button secondary" href="${path}?${new URLSearchParams({ ...query, page: String(page + 1) })}">Older blocks →</a>`);
+  return links.length ? `<nav class="pagination" aria-label="Pagination">${links.join('')}</nav>` : '';
+}
+
+async function activeCategories(pool) {
+  return (await pool.query('SELECT category,display_name FROM code_categories WHERE active=TRUE ORDER BY category')).rows;
+}
+
+function createDashboardRouter({ pool, config }) {
+  const router = express.Router();
+  router.use(ensureCsrf);
+
+  router.get('/login', (req, res) => res.send(layout('Login', `<section class="card narrow login-card"><div class="eyebrow">SECURE NODE ACCESS</div><h1>Administrator login</h1><p class="muted">Authenticate to manage inventory and inspect the immutable event ledger.</p><form method="post" action="/login"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Username<input name="username" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button>Connect to dashboard</button></form></section>`)));
+  router.post('/login', verifyCsrf, (req, res) => {
+    if (safeEqual(req.body.username, config.adminUsername) && safeEqual(req.body.password, config.adminPassword)) {
+      req.session.regenerate((error) => {
+        if (error) return res.status(500).send('Login failed');
+        req.session.authenticated = true;
+        req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+        res.redirect('/dashboard');
+      });
+    } else res.status(401).send(layout('Login', '<section class="card narrow"><h1>Login failed</h1><p class="muted">The supplied credentials were not accepted.</p><a class="button" href="/login">Try again</a></section>'));
+  });
+  router.post('/logout', requireAuth, verifyCsrf, (req, res) => req.session.destroy(() => res.redirect('/login')));
+  router.use('/dashboard', requireAuth);
+
+  router.get('/dashboard', async (req, res, next) => {
+    try {
+      const categories = await activeCategories(pool);
+      const inventory = (await pool.query(
+        `SELECT cc.category,cc.display_name,
+          count(c.id) FILTER (WHERE c.status='unused')::int unused,
+          count(c.id) FILTER (WHERE c.status='used')::int used,
+          count(c.id) FILTER (WHERE c.delivery_status='failed')::int failed
+         FROM code_categories cc LEFT JOIN codes c ON c.category=cc.category
+         WHERE cc.active=TRUE GROUP BY cc.category,cc.display_name ORDER BY cc.category`
+      )).rows;
+      const totals = inventory.reduce((result, row) => ({
+        unused: result.unused + row.unused,
+        used: result.used + row.used,
+        failed: result.failed + row.failed
+      }), { unused: 0, used: 0, failed: 0 });
+      const recent = (await pool.query(
+        `SELECT a.id,a.action,a.category,a.created_at,a.delivery_status,c.code
+         FROM audit_logs a LEFT JOIN codes c ON c.id=a.code_id
+         ORDER BY a.id DESC LIMIT 6`
+      )).rows;
+      const inventoryRows = inventory.map((row) => `<tr><td><span class="category-token">${escapeHtml(row.display_name)}</span></td><td class="metric positive">${row.unused}</td><td class="metric">${row.used}</td><td class="metric ${row.failed ? 'negative' : ''}">${row.failed}</td><td>${row.unused + row.used}</td></tr>`);
+      const recentBlocks = recent.map((event) => `<article class="ledger-block"><div class="block-index">BLOCK #${event.id}</div><div><strong>${escapeHtml(event.action.replaceAll('_', ' '))}</strong><small>${timestamp(event.created_at)} · ${escapeHtml(event.category || 'system')}</small></div><div>${escapeHtml(maskCode(event.code))}</div><div>${badge(event.delivery_status || 'recorded')}</div></article>`).join('') || '<p class="empty-state">The ledger has no events yet.</p>';
+      const options = categories.map((item) => `<option value="${escapeHtml(item.category)}">${escapeHtml(item.display_name)}</option>`).join('');
+      const content = `
+        <section class="hero"><div><div class="eyebrow">LIVE DISTRIBUTION NODE</div><h1>Code inventory</h1><p>Manage stock and trace every code from import to WhatsApp delivery.</p></div><div class="node-status"><span></span> DATABASE ONLINE</div></section>
+        <section class="stats-grid"><article><span>Available supply</span><strong>${totals.unused}</strong><small>Ready to issue</small></article><article><span>Codes consumed</span><strong>${totals.used}</strong><small>Recorded on ledger</small></article><article><span>Delivery alerts</span><strong>${totals.failed}</strong><small>Require review</small></article><article><span>Active categories</span><strong>${categories.length}</strong><small>Configured networks</small></article></section>
+        <section class="dashboard-grid"><div><section class="panel"><div class="section-heading"><div><div class="eyebrow">SUPPLY BY NETWORK</div><h2>Inventory matrix</h2></div><a href="/dashboard/codes">View code lifecycle →</a></div>${table(['Category','Available','Used','Failed','Total'], inventoryRows)}</section><section class="panel"><div class="section-heading"><div><div class="eyebrow">LATEST BLOCKS</div><h2>Recent ledger activity</h2></div><a href="/dashboard/audit">Open full ledger →</a></div><div class="ledger-chain">${recentBlocks}</div></section></div>
+        <aside class="panel import-panel"><div class="eyebrow">MINT INVENTORY</div><h2>Add multiple codes</h2><p class="muted">Choose one category, then paste one code per line. Numbered lists are accepted automatically.</p><form method="post" action="/dashboard/import"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Code category<select name="category" required>${options}</select></label><label>Codes<textarea name="codes" rows="14" required spellcheck="false" placeholder="code1&#10;code2&#10;code3"></textarea></label><button type="submit">Add codes to inventory</button><small>Duplicate codes are skipped. Complete code values never appear in dashboard history.</small></form></aside></section>`;
+      res.send(layout('Inventory', content, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/import', verifyCsrf, async (req, res, next) => {
+    try {
+      const result = await importCodeLines(pool, req.body.category, req.body.codes);
+      const errorSummary = result.errors.length ? `<details><summary>${result.errors.length} invalid line(s)</summary><ul>${result.errors.slice(0, 20).map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul></details>` : '';
+      res.send(layout('Import result', `<section class="card result-card"><div class="success-icon">✓</div><div class="eyebrow">BLOCK COMMITTED</div><h1>Inventory updated</h1><p>Category <span class="category-token">${escapeHtml(result.category)}</span></p><div class="result-grid"><div><strong>${result.imported}</strong><span>Imported</span></div><div><strong>${result.skipped}</strong><span>Duplicates skipped</span></div><div><strong>${result.failed}</strong><span>Invalid</span></div></div>${errorSummary}<a class="button" href="/dashboard">Return to inventory</a><a class="button secondary" href="/dashboard/audit">View ledger</a></section>`, req.session.csrfToken));
+    } catch (error) {
+      if (/category|code|line/i.test(error.message)) return res.status(400).send(layout('Import failed', `<section class="card narrow"><h1>Nothing was imported</h1><p>${escapeHtml(error.message)}</p><a class="button" href="/dashboard">Return to inventory</a></section>`, req.session.csrfToken));
+      next(error);
+    }
+  });
+
+  router.get('/dashboard/codes', async (req, res, next) => {
+    try {
+      const page = pageNumber(req.query.page);
+      const limit = 100;
+      const where = [];
+      const values = [];
+      if (req.query.category) { values.push(req.query.category); where.push(`c.category=$${values.length}`); }
+      if (['unused', 'used', 'reserved'].includes(req.query.status)) { values.push(req.query.status); where.push(`c.status=$${values.length}`); }
+      values.push(limit + 1, (page - 1) * limit);
+      const records = (await pool.query(
+        `SELECT c.id,c.category,c.code,c.status,c.delivery_status,c.created_at,c.used_at,c.used_by_group,c.requested_by,c.request_message_id,g.group_name
+         FROM codes c LEFT JOIN allowed_groups g ON g.group_id=c.used_by_group
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY c.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`,
+        values
+      )).rows;
+      const hasNext = records.length > limit;
+      const rows = records.slice(0, limit).map((code) => `<tr><td class="block-number">#${code.id}</td><td>${escapeHtml(maskCode(code.code))}</td><td>${escapeHtml(code.category)}</td><td>${badge(code.status)}</td><td>${badge(code.delivery_status || 'not sent')}</td><td>${timestamp(code.created_at)}</td><td>${timestamp(code.used_at)}</td><td>${escapeHtml(code.group_name || code.used_by_group || '—')}</td><td>${escapeHtml(code.requested_by || '—')}</td></tr>`);
+      const categories = await activeCategories(pool);
+      const options = categories.map((item) => `<option value="${escapeHtml(item.category)}" ${req.query.category === item.category ? 'selected' : ''}>${escapeHtml(item.display_name)}</option>`).join('');
+      const filters = `<form class="filters"><label>Category<select name="category"><option value="">All categories</option>${options}</select></label><label>Status<select name="status"><option value="">All statuses</option>${['unused','used','reserved'].map((status) => `<option value="${status}" ${req.query.status === status ? 'selected' : ''}>${status}</option>`).join('')}</select></label><button>Filter lifecycle</button><a class="button secondary" href="/dashboard/codes">Clear</a></form>`;
+      res.send(layout('Code lifecycle', `<section class="hero compact"><div><div class="eyebrow">ASSET REGISTRY</div><h1>Code lifecycle</h1><p>Masked inventory records with creation, usage, requester, group, and delivery state.</p></div></section>${filters}${table(['Record','Masked code','Category','Status','Delivery','Created UTC','Used UTC','Group','Requester'], rows, 'ledger-table')}${pagination('/dashboard/codes', { category: req.query.category || '', status: req.query.status || '' }, page, hasNext)}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.get('/dashboard/groups', async (req, res, next) => {
+    try {
+      const groups = (await pool.query('SELECT * FROM allowed_groups ORDER BY group_name')).rows;
+      const rows = groups.map((group) => `<tr><td>${escapeHtml(group.group_name)}</td><td><code>${escapeHtml(group.group_id)}</code></td><td>${badge(group.active ? 'active' : 'disabled')}</td><td><form method="post" action="/dashboard/groups/toggle"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}"><input type="hidden" name="active" value="${group.active ? 'false' : 'true'}"><button class="small-button ${group.active ? 'danger' : ''}">${group.active ? 'Disable' : 'Enable'}</button></form></td></tr>`);
+      res.send(layout('Groups', `<section class="hero compact"><div><div class="eyebrow">ACCESS CONTROL</div><h1>Authorized groups</h1><p>Only active groups can consume inventory.</p></div></section>${table(['Name','Group ID','State','Action'], rows)}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/groups/toggle', verifyCsrf, async (req, res, next) => {
+    try {
+      const active = req.body.active === 'true';
+      const updated = await pool.query('UPDATE allowed_groups SET active=$2,updated_at=NOW() WHERE group_id=$1 RETURNING group_id', [req.body.group_id, active]);
+      if (updated.rowCount) await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', [active ? 'group_enabled' : 'group_disabled', req.body.group_id]);
+      res.redirect('/dashboard/groups');
+    } catch (error) { next(error); }
+  });
+
+  router.get('/dashboard/audit', async (req, res, next) => {
+    try {
+      const page = pageNumber(req.query.page);
+      const limit = 100;
+      const where = [];
+      const values = [];
+      for (const [key, column] of [['category', 'a.category'], ['group', 'a.group_id'], ['action', 'a.action']]) {
+        if (req.query[key]) { values.push(req.query[key]); where.push(`${column}=$${values.length}`); }
+      }
+      if (req.query.date) { values.push(req.query.date); where.push(`a.created_at >= $${values.length}::date AND a.created_at < $${values.length}::date + interval '1 day'`); }
+      values.push(limit + 1, (page - 1) * limit);
+      const records = (await pool.query(
+        `SELECT a.*,c.code,g.group_name FROM audit_logs a
+         LEFT JOIN codes c ON c.id=a.code_id LEFT JOIN allowed_groups g ON g.group_id=a.group_id
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY a.id DESC LIMIT $${values.length - 1} OFFSET $${values.length}`,
+        values
+      )).rows;
+      const hasNext = records.length > limit;
+      const rows = records.slice(0, limit).map((event) => `<tr><td class="block-number">#${event.id}</td><td>${timestamp(event.created_at)}</td><td>${escapeHtml(event.action)}</td><td>${escapeHtml(event.category || '—')}</td><td>${escapeHtml(maskCode(event.code))}</td><td>${escapeHtml(event.group_name || event.group_id || '—')}</td><td>${escapeHtml(event.requested_by || '—')}</td><td>${badge(event.delivery_status || 'recorded')}</td><td><code>${escapeHtml(event.whatsapp_message_id || '—')}</code></td><td>${escapeHtml(event.error_message || '—')}</td></tr>`);
+      const filters = `<form class="filters ledger-filters"><label>Category<input name="category" placeholder="e.g. 830" value="${escapeHtml(req.query.category)}"></label><label>Group ID<input name="group" placeholder="120…@g.us" value="${escapeHtml(req.query.group)}"></label><label>Event<input name="action" placeholder="delivered" value="${escapeHtml(req.query.action)}"></label><label>UTC date<input type="date" name="date" value="${escapeHtml(req.query.date)}"></label><button>Search ledger</button><a class="button secondary" href="/dashboard/audit">Clear</a></form>`;
+      const query = { category: req.query.category || '', group: req.query.group || '', action: req.query.action || '', date: req.query.date || '' };
+      res.send(layout('Event ledger', `<section class="hero compact"><div><div class="eyebrow">AUDIT CHAIN</div><h1>Complete event ledger</h1><p>Every recorded import, allocation, delivery outcome, stock event, and group-access change.</p></div></section>${filters}${table(['Block','UTC timestamp','Event','Category','Masked code','Group','Requester','Delivery','Message ID','Details'], rows, 'ledger-table')}${pagination('/dashboard/audit', query, page, hasNext)}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.get('/dashboard/failed', async (req, res, next) => {
+    try {
+      const records = (await pool.query("SELECT id,category,code,used_by_group,requested_by,used_at FROM codes WHERE delivery_status='failed' ORDER BY used_at DESC")).rows;
+      const rows = records.map((code) => `<tr><td class="block-number">#${code.id}</td><td>${escapeHtml(code.category)}</td><td>${escapeHtml(maskCode(code.code))}</td><td>${escapeHtml(code.used_by_group)}</td><td>${escapeHtml(code.requested_by)}</td><td>${timestamp(code.used_at)}</td></tr>`);
+      res.send(layout('Delivery alerts', `<section class="hero compact"><div><div class="eyebrow">EXCEPTION QUEUE</div><h1>Failed deliveries</h1><p>These codes remain marked as used and require manual review.</p></div></section>${table(['Record','Category','Masked code','Group','Requester','UTC timestamp'], rows)}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  return router;
+}
+
+module.exports = { createDashboardRouter };

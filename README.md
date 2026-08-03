@@ -7,11 +7,13 @@ A production-oriented MVP that allocates one-time codes to authorized WhatsApp g
 ## What it does
 
 - Handles `/tag <category>` only in group chats; active categories and aliases are managed in PostgreSQL rather than command code.
+- Supports atomic quantity requests such as `/tag 830 5x`; omitting the quantity issues one code. If fewer codes remain than requested, all remaining codes are issued and a separate stock-ended message is sent. Requests are capped by `MAX_CODES_PER_REQUEST`.
+- Supports equivalent shorthand such as `830x5`, `830 x 5`, and `830 × 5`, with or without the `/tag` prefix.
 - Authorizes groups from `allowed_groups`; joining a group never authorizes it.
 - Atomically records the WhatsApp message and claims inventory with a PostgreSQL transaction and `FOR UPDATE SKIP LOCKED`.
 - Marks codes used/pending before attempting delivery. Uncertain or failed delivery stays used and appears in manual review.
 - Supports `/help`, administrator-only `/groupid`, `/stock <category>`, and `/status`.
-- Includes a session-protected, CSRF-protected dashboard for aggregate stock, CSV upload, group toggles, masked audit data, and failed deliveries.
+- Includes a session-protected, CSRF-protected dashboard for aggregate stock, multiline code entry, code lifecycle tracking, group toggles, masked audit data, and failed deliveries.
 - Persists WhatsApp `LocalAuth`, emits structured logs without code values, rate-limits each group, reconnects safely, and shuts down gracefully.
 
 ## Requirements
@@ -57,6 +59,7 @@ npm run groups -- enable "120363000000000000@g.us"
 | Command | Who | Result |
 |---|---|---|
 | `/tag 830`, `/tag 2320` | Member of an active group | Atomically allocates from that category |
+| `/tag 830 5x` | Member of an active group | Atomically allocates up to five distinct codes and reports when stock is exhausted |
 | `/tag 5150` or `/tag 5k` | Member of an active group | Both allocate from canonical category `5150` |
 | `/tag 13k`, `/tag 27k`, `/tag 56k` | Member of an active group | Atomically allocates from that category |
 | `/help` | Any group member | Shows supported commands |
@@ -74,7 +77,7 @@ The only accepted columns are required `category` and `code` values (extra colum
 npm run import-codes -- .\path\to\codes.csv
 ```
 
-The dashboard upload accepts `.csv`/`text/csv` only and enforces `MAX_CSV_SIZE_MB`. Dashboard pages show aggregate inventory and masked values, not the full code list.
+The dashboard accepts one or more codes pasted into a multiline field after selecting a category. Put one code on each line; numbered lists such as `1. CODE` are also accepted. Duplicate codes are skipped. Dashboard history and lifecycle pages show masked values rather than complete codes.
 
 ## Docker Compose
 

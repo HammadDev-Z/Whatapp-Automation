@@ -58,7 +58,14 @@ async function importCsv(pool, input) {
          ON CONFLICT(code) DO NOTHING RETURNING id`,
         [category, row.code]
       );
-      if (result.rowCount) imported += 1; else skipped += 1;
+      if (result.rowCount) {
+        imported += 1;
+        await client.query(
+          `INSERT INTO audit_logs(action,category,code_id,delivery_status)
+           VALUES('code_imported',$1,$2,NULL)`,
+          [category, result.rows[0].id]
+        );
+      } else skipped += 1;
     }
     await client.query('COMMIT');
     return { imported, skipped, failed, errors: validation.errors };

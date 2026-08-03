@@ -15,7 +15,7 @@ async function main(){
  const allocationService=new CodeAllocationService(pool);
  const categoryRepository=new CategoryRepository(pool);
  const rateLimiter=new GroupRateLimiter({limit:config.groupRateLimit,windowMs:config.groupRateWindowMinutes*60*1000});
- const messageHandler=createMessageHandler({allocationService,categoryRepository,pool,isAdmin:makeAdminChecker(config.adminNumbers),rateLimiter,logger});
+ const messageHandler=createMessageHandler({allocationService,categoryRepository,pool,isAdmin:makeAdminChecker(config.adminNumbers),rateLimiter,maxCodesPerRequest:config.maxCodesPerRequest,tagDelayMinSeconds:config.tagResponseDelayMinSeconds,tagDelayMaxSeconds:config.tagResponseDelayMaxSeconds,logger});
  const bot=createWhatsAppBot({clientId:config.whatsappClientId,messageHandler,state:botState,logger,reconnectDelayMs:config.reconnectDelayMs});
  const app=createApp({pool,config,botState});const server=app.listen(config.port,()=>logger.info('HTTP server listening',{port:config.port}));
  await bot.initialize();

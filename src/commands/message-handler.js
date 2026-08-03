@@ -2,7 +2,7 @@
 
 const { parseCommand } = require('../utilities/commands');
 
-const HELP = 'Commands:\n/tag <category> - request a code\n/help - show this help\n/groupid - show group ID (admin)\n/stock <category> - remaining stock (admin)\n/status - service status (admin)';
+const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock <category> - remaining stock (admin)\n/status - service status (admin)';
 
 function serializeWid(value) {
   if (!value) return '';
@@ -18,6 +18,19 @@ function serializeMessageId(id) {
   if (typeof id._serialized === 'string' && id._serialized) return id._serialized;
   if (typeof id.id !== 'string' || !id.id) return '';
   return [id.fromMe ? '1' : '0', serializeWid(id.remote), id.id, serializeWid(id.participant)].join('_');
+}
+
+function formatCodeList(items) {
+  const lines = items.map((item, index) => `${index + 1}. ${item.code}`);
+  const groups = [];
+  for (let index = 0; index < lines.length; index += 10) groups.push(lines.slice(index, index + 10).join('\n'));
+  return groups.join('\n\n\n');
+}
+
+function randomDelayMs(minSeconds, maxSeconds, random = Math.random) {
+  const min = Math.ceil(minSeconds);
+  const max = Math.floor(maxSeconds);
+  return (min + Math.floor(random() * (max - min + 1))) * 1000;
 }
 
 async function resolveSender(message, timeoutMs = 2000) {
@@ -48,7 +61,7 @@ async function resolveSender(message, timeoutMs = 2000) {
   }
 }
 
-function createMessageHandler({ allocationService, categoryRepository, pool, isAdmin, rateLimiter, logger }) {
+function createMessageHandler({ allocationService, categoryRepository, pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
   const inFlight = new Set();
 
   return async function handleMessage(message) {
@@ -61,7 +74,7 @@ function createMessageHandler({ allocationService, categoryRepository, pool, isA
     inFlight.add(messageId);
     try {
       const sender = message.author || message.from;
-      logger.info('WhatsApp command received', { command: command.name, category: command.category, groupId, messageId });
+      logger.info('WhatsApp command received', { command: command.name, category: command.category, quantity: command.quantity, groupId, messageId });
       if (command.name === 'invalid') { await message.reply('Invalid command. Use /help for supported commands.'); return; }
       if (command.name === 'help') {
         const categories = await categoryRepository.listActive();
@@ -89,6 +102,10 @@ function createMessageHandler({ allocationService, categoryRepository, pool, isA
         category = await categoryRepository.resolve(command.category);
         if (!category) { await message.reply('❌ Unknown code category. Use /help to see available categories.'); return; }
       }
+      if (command.name === 'tag' && command.quantity > maxCodesPerRequest) {
+        await message.reply(`❌ A maximum of ${maxCodesPerRequest} codes can be requested at once.`);
+        return;
+      }
       if (command.name === 'stock') {
         const result = await pool.query("SELECT count(*)::int AS count FROM codes WHERE category=$1 AND status='unused'", [category]);
         await message.reply(`Remaining ${category} codes: ${result.rows[0].count}`);
@@ -100,25 +117,48 @@ function createMessageHandler({ allocationService, categoryRepository, pool, isA
       if (seen.rowCount) return;
       if (!rateLimiter.consume(groupId)) { await message.reply('⏳ Too many requests from this group. Please try again later.'); return; }
 
-      logger.info('Code allocation starting', { category, groupId, messageId });
-      const allocation = await allocationService.allocate({ category, groupId, requestedBy: sender, messageId });
+      logger.info('Code allocation starting', { category, quantity: command.quantity, groupId, messageId });
+      const allocation = await allocationService.allocate({ category, groupId, requestedBy: sender, messageId, quantity: command.quantity });
       logger.info('Code allocation finished', { category, groupId, messageId, allocationStatus: allocation.status });
       if (allocation.status === 'duplicate') return;
       if (allocation.status === 'unauthorized') { await message.reply('❌ This group is not authorized to request codes.'); return; }
-      if (allocation.status === 'out_of_stock') { await message.reply(`❌ No unused ${category} codes are currently available.`); return; }
+      if (allocation.status === 'out_of_stock') {
+        const available = allocation.availableQuantity || 0;
+        await message.reply(available
+          ? `❌ Only ${available} unused ${category} codes are available; ${command.quantity} were requested.`
+          : `❌ No unused ${category} codes are currently available.`);
+        return;
+      }
 
+      const issued = allocation.codes || [{ codeId: allocation.codeId, code: allocation.code }];
+      let delivered = false;
       try {
-        await message.reply(`✅ ${category} code issued\n\nCode: ${allocation.code}`);
-        await allocationService.recordDelivery({ codeId: allocation.codeId, category, groupId, requestedBy: sender, messageId, success: true });
+        const delayMs = randomDelayMs(tagDelayMinSeconds, tagDelayMaxSeconds, random);
+        logger.info('Delaying code response', { category, quantity: issued.length, groupId, messageId, delayMs });
+        await sleep(delayMs);
+        const reply = issued.length === 1
+          ? `✅ ${category} code issued\n\nCode: ${issued[0].code}`
+          : `✅ ${issued.length} × ${category} codes issued\n\n${formatCodeList(issued)}`;
+        await message.reply(reply);
+        await allocationService.recordDelivery({ codeIds: issued.map((item) => item.codeId), category, groupId, requestedBy: sender, messageId, success: true });
+        delivered = true;
       } catch (error) {
         logger.error('WhatsApp delivery failed', { messageId, groupId, error });
         try {
-          await allocationService.recordDelivery({ codeId: allocation.codeId, category, groupId, requestedBy: sender, messageId, success: false, error });
+          const issued = allocation.codes || [{ codeId: allocation.codeId }];
+          await allocationService.recordDelivery({ codeIds: issued.map((item) => item.codeId), category, groupId, requestedBy: sender, messageId, success: false, error });
         } catch (auditError) { logger.error('Failed to record delivery failure', { messageId, groupId, error: auditError }); }
+      }
+      if (delivered && allocation.partial) {
+        try {
+          await message.reply(`❌ ${category} stock is finished. ${issued.length} codes were issued out of ${allocation.requestedQuantity} requested.`);
+        } catch (error) {
+          logger.warn?.('Failed to send stock-ended notice', { messageId, groupId, error });
+        }
       }
     } catch (error) { logger.error('Message processing failed', { groupId, messageId, error }); }
     finally { inFlight.delete(messageId); }
   };
 }
 
-module.exports = { createMessageHandler, resolveSender, serializeMessageId, HELP };
+module.exports = { createMessageHandler, resolveSender, serializeMessageId, formatCodeList, randomDelayMs, HELP };
