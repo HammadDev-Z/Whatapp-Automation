@@ -1,0 +1,4 @@
+'use strict';
+function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function layout(title,content,csrfToken=''){const logout=csrfToken?`<form method="post" action="/logout" class="inline"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><button>Log out</button></form>`:'';return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><link rel="stylesheet" href="/styles.css"></head><body><header><strong>WhatsApp Code Bot</strong><nav><a href="/dashboard">Inventory</a><a href="/dashboard/groups">Groups</a><a href="/dashboard/audit">Audit</a><a href="/dashboard/failed">Failed deliveries</a>${logout}</nav></header><main>${content}</main></body></html>`;}
+module.exports={escapeHtml,layout};
