@@ -16,8 +16,21 @@ function badge(value, kind = '') {
   return `<span class="badge ${escapeHtml(kind || String(value || '').toLowerCase())}">${escapeHtml(value || '—')}</span>`;
 }
 
+const PAKISTAN_TIMEZONE = 'Asia/Karachi';
+
 function timestamp(value) {
-  return value ? escapeHtml(value.toISOString()) : '<span class="muted">—</span>';
+  if (!value) return '<span class="muted">—</span>';
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: PAKISTAN_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  return escapeHtml(formatter.format(value).replace(',', ''));
 }
 
 function pageNumber(value) {
@@ -104,8 +117,7 @@ function createDashboardRouter({ pool, config }) {
       const content = `
         <section class="hero"><div><div class="eyebrow">LIVE DISTRIBUTION NODE</div><h1>Code inventory</h1><p>Manage stock and trace every code from import to WhatsApp delivery.</p></div><div class="node-status"><span></span> DATABASE ONLINE</div></section>
         <section class="stats-grid"><article><span>Available supply</span><strong>${totals.unused}</strong><small>Ready to issue</small></article><article><span>Codes consumed</span><strong>${totals.used}</strong><small>Recorded on ledger</small></article><article><span>Delivery alerts</span><strong>${totals.failed}</strong><small>Require review</small></article><article><span>Active categories</span><strong>${categories.length}</strong><small>Configured networks</small></article></section>
-        <section class="dashboard-grid"><div><section class="panel"><div class="section-heading"><div><div class="eyebrow">SUPPLY BY NETWORK</div><h2>Inventory matrix</h2></div><a href="/dashboard/codes">View code lifecycle →</a></div>${table(['Category','Available','Used','Failed','Total'], inventoryRows)}</section><section class="panel"><div class="section-heading"><div><div class="eyebrow">LATEST BLOCKS</div><h2>Recent ledger activity</h2></div><a href="/dashboard/audit">Open full ledger →</a></div><div class="ledger-chain">${recentBlocks}</div></section></div>
-        <aside class="panel import-panel"><div class="eyebrow">MINT INVENTORY</div><h2>Add multiple codes</h2><p class="muted">Choose one category, then paste one code per line. Numbered lists are accepted automatically.</p><form method="post" action="/dashboard/import"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Code category<select name="category" required>${options}</select></label><label>Codes<textarea name="codes" rows="14" required spellcheck="false" placeholder="code1&#10;code2&#10;code3"></textarea></label><button type="submit">Add codes to inventory</button><small>Duplicate codes are skipped. Complete code values never appear in dashboard history.</small></form></aside></section>`;
+        <section class="dashboard-grid"><section class="panel inventory-panel"><div class="section-heading"><div><div class="eyebrow">SUPPLY BY NETWORK</div><h2>Inventory matrix</h2></div><a href="/dashboard/codes">View code lifecycle →</a></div>${table(['Category','Available','Used','Failed','Total'], inventoryRows)}</section><aside class="panel import-panel"><div class="eyebrow">MINT INVENTORY</div><h2>Add multiple codes</h2><p class="muted">Choose one category, then paste one code per line. Numbered lists are accepted automatically.</p><form method="post" action="/dashboard/import"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Code category<select name="category" required>${options}</select></label><label>Codes<textarea name="codes" rows="14" required spellcheck="false" placeholder="code1&#10;code2&#10;code3"></textarea></label><button type="submit">Add codes to inventory</button><small>Duplicate codes are skipped. Complete code values never appear in dashboard history.</small></form></aside><section class="panel history-panel"><div class="section-heading"><div><div class="eyebrow">LATEST BLOCKS</div><h2>Recent ledger activity</h2></div><a href="/dashboard/audit">Open full ledger →</a></div><div class="ledger-chain">${recentBlocks}</div></section></section>`;
       res.send(layout('Inventory', content, req.session.csrfToken));
     } catch (error) { next(error); }
   });
@@ -229,6 +241,12 @@ function createDashboardRouter({ pool, config }) {
     } catch (error) { next(error); }
   });
 
+  const LEDGER_PERIODS = {
+    today: { label: 'Today', sql: `used_at AT TIME ZONE 'Asia/Karachi' >= timezone('Asia/Karachi', NOW()) - interval '1 day'` },
+    week: { label: '1 week', sql: `used_at AT TIME ZONE 'Asia/Karachi' >= timezone('Asia/Karachi', NOW()) - interval '7 days'` },
+    month: { label: '1 month', sql: `used_at AT TIME ZONE 'Asia/Karachi' >= timezone('Asia/Karachi', NOW()) - interval '30 days'` }
+  };
+
   router.get('/dashboard/audit', async (req, res, next) => {
     try {
       const page = pageNumber(req.query.page);
@@ -238,7 +256,10 @@ function createDashboardRouter({ pool, config }) {
       for (const [key, column] of [['category', 'a.category'], ['group', 'a.group_id'], ['action', 'a.action']]) {
         if (req.query[key]) { values.push(req.query[key]); where.push(`${column}=$${values.length}`); }
       }
-      if (req.query.date) { values.push(req.query.date); where.push(`a.created_at >= $${values.length}::date AND a.created_at < $${values.length}::date + interval '1 day'`); }
+      if (req.query.date) {
+        values.push(req.query.date);
+        where.push(`a.created_at AT TIME ZONE 'Asia/Karachi' >= $${values.length}::date AND a.created_at AT TIME ZONE 'Asia/Karachi' < $${values.length}::date + interval '1 day'`);
+      }
       values.push(limit + 1, (page - 1) * limit);
       const records = (await pool.query(
         `SELECT a.*,c.code,g.group_name FROM audit_logs a
@@ -249,9 +270,24 @@ function createDashboardRouter({ pool, config }) {
       )).rows;
       const hasNext = records.length > limit;
       const rows = records.slice(0, limit).map((event) => `<tr><td class="block-number">#${event.id}</td><td>${timestamp(event.created_at)}</td><td>${escapeHtml(event.action)}</td><td>${escapeHtml(event.category || '—')}</td><td>${escapeHtml(maskCode(event.code))}</td><td>${escapeHtml(event.group_name || event.group_id || '—')}</td><td>${escapeHtml(event.requested_by || '—')}</td><td>${badge(event.delivery_status || 'recorded')}</td><td><code>${escapeHtml(event.whatsapp_message_id || '—')}</code></td><td>${escapeHtml(event.error_message || '—')}</td></tr>`);
-      const filters = `<form class="filters ledger-filters"><label>Category<input name="category" placeholder="e.g. 830" value="${escapeHtml(req.query.category)}"></label><label>Group ID<input name="group" placeholder="120…@g.us" value="${escapeHtml(req.query.group)}"></label><label>Event<input name="action" placeholder="delivered" value="${escapeHtml(req.query.action)}"></label><label>UTC date<input type="date" name="date" value="${escapeHtml(req.query.date)}"></label><button>Search ledger</button><a class="button secondary" href="/dashboard/audit">Clear</a></form>`;
+      const selectedPeriod = String(req.query.period || '').trim();
+      const selectedDefinition = LEDGER_PERIODS[selectedPeriod];
+      let periodSummary = '';
+      if (selectedDefinition) {
+        const summary = await pool.query(
+          `SELECT category, count(*)::int AS used_count
+           FROM codes
+           WHERE status='used' AND ${selectedDefinition.sql}
+           GROUP BY category
+           ORDER BY ${CATEGORY_ORDER_EXPRESSION}`
+        );
+        const summaryRows = summary.rows.map((row) => `<li>${escapeHtml(row.category)} ${row.used_count} used</li>`).join('') || '<li>No used codes in this period</li>';
+        periodSummary = `<section class="panel period-summary"><div class="section-heading"><div><div class="eyebrow">${escapeHtml(selectedDefinition.label)} usage</div><h2>Category usage summary</h2></div></div><ul class="usage-summary">${summaryRows}</ul></section>`;
+      }
+      const periodButtons = Object.entries(LEDGER_PERIODS).map(([key, definition]) => `<a class="button${selectedPeriod === key ? '' : ' secondary'}" href="/dashboard/audit?${new URLSearchParams({ ...req.query, period: key, page: '1' })}">${escapeHtml(definition.label)}</a>`).join('');
+      const filters = `<form class="filters ledger-filters"><label>Category<input name="category" placeholder="e.g. 830" value="${escapeHtml(req.query.category)}"></label><label>Group ID<input name="group" placeholder="120…@g.us" value="${escapeHtml(req.query.group)}"></label><label>Event<input name="action" placeholder="delivered" value="${escapeHtml(req.query.action)}"></label><label>PKT date<input type="date" name="date" value="${escapeHtml(req.query.date)}"></label><button>Search ledger</button><a class="button secondary" href="/dashboard/audit">Clear</a></form>`;
       const query = { category: req.query.category || '', group: req.query.group || '', action: req.query.action || '', date: req.query.date || '' };
-      res.send(layout('Event ledger', `<section class="hero compact"><div><div class="eyebrow">AUDIT CHAIN</div><h1>Complete event ledger</h1><p>Every recorded import, allocation, delivery outcome, stock event, and group-access change.</p></div></section>${filters}${table(['Block','UTC timestamp','Event','Category','Masked code','Group','Requester','Delivery','Message ID','Details'], rows, 'ledger-table')}${pagination('/dashboard/audit', query, page, hasNext)}`, req.session.csrfToken));
+      res.send(layout('Event ledger', `<section class="hero compact"><div><div class="eyebrow">AUDIT CHAIN</div><h1>Complete event ledger</h1><p>Every recorded import, allocation, delivery outcome, stock event, and group-access change.</p></div></section><div class="period-buttons">${periodButtons}</div>${periodSummary}${filters}${table(['Block','PKT timestamp','Event','Category','Masked code','Group','Requester','Delivery','Message ID','Details'], rows, 'ledger-table')}${pagination('/dashboard/audit', query, page, hasNext)}`, req.session.csrfToken));
     } catch (error) { next(error); }
   });
 
