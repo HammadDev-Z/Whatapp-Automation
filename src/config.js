@@ -24,10 +24,14 @@ function loadConfig() {
     maxCodesPerRequest: number('MAX_CODES_PER_REQUEST', 50),
     tagResponseDelayMinSeconds: number('TAG_RESPONSE_DELAY_MIN_SECONDS', 5),
     tagResponseDelayMaxSeconds: number('TAG_RESPONSE_DELAY_MAX_SECONDS', 10),
+    lowStockAlertGroupId: String(process.env.LOW_STOCK_ALERT_GROUP_ID || '').trim(),
     reconnectDelayMs: number('WHATSAPP_RECONNECT_DELAY_MS', 10000)
   };
   if (config.tagResponseDelayMaxSeconds < config.tagResponseDelayMinSeconds) {
     throw new Error('TAG_RESPONSE_DELAY_MAX_SECONDS must be greater than or equal to TAG_RESPONSE_DELAY_MIN_SECONDS');
+  }
+  if (config.lowStockAlertGroupId && !config.lowStockAlertGroupId.endsWith('@g.us')) {
+    throw new Error('LOW_STOCK_ALERT_GROUP_ID must be a WhatsApp group ID ending in @g.us');
   }
   if (config.env === 'production' && (!config.adminPassword || config.adminPassword.includes('replace-'))) {
     throw new Error('A strong ADMIN_PASSWORD is required in production');

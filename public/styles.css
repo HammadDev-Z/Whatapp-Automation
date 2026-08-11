@@ -414,6 +414,33 @@ button.secondary:hover,
   border-color: rgba(37, 209, 171, 0.3);
 }
 
+button.danger,
+.button.danger {
+  color: #fff;
+  background: rgba(255, 99, 117, 0.16);
+  border: 1px solid rgba(255, 99, 117, 0.45);
+  box-shadow: none;
+}
+
+button.danger:hover,
+.button.danger:hover {
+  background: rgba(255, 99, 117, 0.28);
+  box-shadow: 0 14px 32px rgba(255, 99, 117, 0.14);
+}
+
+.reset-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.95rem;
+}
+
+.reset-panel h2,
+.reset-panel p {
+  margin: 0.25rem 0;
+}
+
 input,
 select,
 textarea {

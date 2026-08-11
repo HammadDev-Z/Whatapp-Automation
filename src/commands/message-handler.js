@@ -1,8 +1,10 @@
 'use strict';
 
 const { parseCommand } = require('../utilities/commands');
+const { parseCalculation } = require('../services/calculator');
+const Decimal = require('decimal.js');
 
-const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock <category> - remaining stock (admin)\n/status - service status (admin)';
+const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock - all remaining stock (admin)\n/stock <category> - category stock (admin)\n/status - service status (admin)';
 
 function serializeWid(value) {
   if (!value) return '';
@@ -33,6 +35,11 @@ function randomDelayMs(minSeconds, maxSeconds, random = Math.random) {
   return (min + Math.floor(random() * (max - min + 1))) * 1000;
 }
 
+function formatAmount(value) {
+  const fixed = new Decimal(value).toDecimalPlaces(2).toFixed(2);
+  return fixed.endsWith('00') ? `${fixed.slice(0, -2)}0` : fixed;
+}
+
 async function resolveSender(message, timeoutMs = 2000) {
   const sender = message.author || message.from;
   if (!String(sender).endsWith('@lid')) return sender;
@@ -61,19 +68,41 @@ async function resolveSender(message, timeoutMs = 2000) {
   }
 }
 
-function createMessageHandler({ allocationService, categoryRepository, pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
+function createMessageHandler({ allocationService, categoryRepository, calculationRepository, stockMonitor, lowStockAlertGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
   const inFlight = new Set();
 
   return async function handleMessage(message) {
     if (!message || message.fromMe || !String(message.from || '').endsWith('@g.us')) return;
-    const command = parseCommand(message.body);
-    if (!command) return;
+    const calculation = parseCalculation(message.body);
+    const command = calculation ? null : parseCommand(message.body);
+    if (!calculation && !command) return;
     const groupId = message.from;
     const messageId = serializeMessageId(message.id);
     if (!messageId || inFlight.has(messageId)) return;
     inFlight.add(messageId);
     try {
       const sender = message.author || message.from;
+      if (calculation) {
+        const result = await calculationRepository.record({
+          groupId,
+          messageId,
+          sender,
+          expression: calculation.expression,
+          amount: calculation.amount,
+          type: calculation.type
+        });
+        if (result.duplicate) return;
+        const expressionLine = calculation.type === 'adjustment'
+          ? formatAmount(calculation.amount)
+          : `① ${calculation.expression}=${formatAmount(calculation.amount)}`;
+        await message.reply([
+          '🎉 CALCULATION 🎉',
+          expressionLine,
+          `Cur Total: ${formatAmount(calculation.amount)}`,
+          `All Total:${formatAmount(result.currentTotal)}`
+        ].join('\n'));
+        return;
+      }
       logger.info('WhatsApp command received', { command: command.name, category: command.category, quantity: command.quantity, groupId, messageId });
       if (command.name === 'invalid') { await message.reply('Invalid command. Use /help for supported commands.'); return; }
       if (command.name === 'help') {
@@ -99,7 +128,7 @@ function createMessageHandler({ allocationService, categoryRepository, pool, isA
         return;
       }
       let category = command.category;
-      if (command.name === 'tag' || command.name === 'stock') {
+      if (command.name === 'tag' || (command.name === 'stock' && command.category)) {
         category = await categoryRepository.resolve(command.category);
         if (!category) { await message.reply('❌ Unknown code category. Use /help to see available categories.'); return; }
       }
@@ -108,6 +137,13 @@ function createMessageHandler({ allocationService, categoryRepository, pool, isA
         return;
       }
       if (command.name === 'stock') {
+        if (!category) {
+          const inventory = await categoryRepository.listStock();
+          const total = inventory.reduce((sum, item) => sum + Number(item.unused), 0);
+          const lines = inventory.map((item) => `${item.display_name}: ${item.unused}`);
+          await message.reply(['📦 Remaining stock', '', ...lines, '', `Total: ${total}`].join('\n'));
+          return;
+        }
         const result = await pool.query("SELECT count(*)::int AS count FROM codes WHERE category=$1 AND status='unused'", [category]);
         await message.reply(`Remaining ${category} codes: ${result.rows[0].count}`);
         return;
@@ -155,6 +191,20 @@ function createMessageHandler({ allocationService, categoryRepository, pool, isA
           await message.reply(`❌ ${category} stock is finished. ${issued.length} codes were issued out of ${allocation.requestedQuantity} requested.`);
         } catch (error) {
           logger.warn?.('Failed to send stock-ended notice', { messageId, groupId, error });
+        }
+      }
+      if (delivered && stockMonitor && lowStockAlertGroupId) {
+        try {
+          const lowStock = await stockMonitor.check(category);
+          if (lowStock) {
+            await message.client.sendMessage(lowStockAlertGroupId, [
+              '⚠️ LOW STOCK ALERT',
+              `${lowStock.category} remaining stock: ${lowStock.remaining}`,
+              `Alert level: below ${lowStock.threshold}`
+            ].join('\n'));
+          }
+        } catch (error) {
+          logger.warn?.('Failed to check or send low stock alert', { category, groupId, alertGroupId: lowStockAlertGroupId, messageId, error });
         }
       }
     } catch (error) { logger.error('Message processing failed', { groupId, messageId, error }); }

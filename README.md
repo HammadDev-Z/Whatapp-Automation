@@ -62,16 +62,22 @@ npm run groups -- enable "120363000000000000@g.us"
 | `/tag 830 5x` | Member of an active group | Atomically allocates up to five distinct codes and reports when stock is exhausted |
 | `/tag 5150` or `/tag 5k` | Member of an active group | Both allocate from canonical category `5150` |
 | `/tag 13k`, `/tag 27k`, `/tag 56k` | Member of an active group | Atomically allocates from that category |
+| `/tag 2$` or `/tag 68k` | Member of an active group | Both allocate from canonical category `68k` |
+| `/tag 5$` or `/tag 224k` | Member of an active group | Both allocate from canonical category `224k` |
+| `/tag 10$` or `/tag 1.4m` | Member of an active group | Both allocate from canonical category `1.4m` |
 | `/help` | Any group member | Shows supported commands |
 | `/groupid` | Configured administrator | Shows the current group ID |
-| `/stock <category>` | Configured administrator | Shows unused quantity; aliases are supported |
+| `/stock` | Configured administrator | Shows remaining stock for every active category and the total |
+| `/stock <category>` | Configured administrator | Shows unused quantity for one category; aliases are supported |
 | `/status` | Configured administrator | Checks the bot process and database |
 
 Messages from the bot, direct chats, malformed commands, and duplicate message IDs never allocate inventory. Rate limits are per group and configured with `GROUP_RATE_LIMIT` and `GROUP_RATE_WINDOW_MINUTES`.
 
+After a successful code delivery, the bot posts a low-stock alert only in the WhatsApp group configured by `LOW_STOCK_ALERT_GROUP_ID`. Thresholds are: `830`, `2320`, and `5150` below 10; `13k` below 4; and `27k` or `56k` below 2. Leave the setting empty to disable alerts.
+
 ## CSV imports
 
-The only accepted columns are required `category` and `code` values (extra columns are ignored). Active categories are `830`, `2320`, `5150` (alias `5k`), `13k`, `27k`, and `56k`. Values are trimmed, aliases resolved, blank/invalid/unsupported rows rejected, duplicates within the file skipped, and existing database codes skipped. The import transaction either commits its inserts or rolls back on a database error. Reports show totals and row errors, never all code values.
+The only accepted columns are required `category` and `code` values (extra columns are ignored). Active categories are `830`, `2320`, `5150` (alias `5k`), `13k`, `27k`, `56k`, `68k` (alias `2$`), `224k` (alias `5$`), and `1.4m` (alias `10$`). Values are trimmed, aliases resolved, blank/invalid/unsupported rows rejected, duplicates within the file skipped, and existing database codes skipped. The import transaction either commits its inserts or rolls back on a database error. Reports show totals and row errors, never all code values.
 
 ```powershell
 npm run import-codes -- .\path\to\codes.csv

@@ -1,6 +1,6 @@
 'use strict';
 
-const CATEGORY_PATTERN = /^[a-z0-9_-]+$/;
+const CATEGORY_PATTERN = /^[a-z0-9_.$-]+$/;
 
 function normalizeCategory(value) {
   if (typeof value !== 'string') return null;

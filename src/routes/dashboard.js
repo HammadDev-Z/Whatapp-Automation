@@ -7,6 +7,7 @@ const { escapeHtml, layout } = require('../utilities/html');
 const { maskCode } = require('../utilities/mask');
 const { importCodeLines } = require('../services/code-importer');
 const { AdminRepository } = require('../services/admin-repository');
+const { UsageReportingService } = require('../services/usage-reporting');
 
 function table(headers, rows, className = '') {
   return `<div class="table-wrap ${escapeHtml(className)}"><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${headers.length}" class="empty-state">No records found</td></tr>`}</tbody></table></div>`;
@@ -53,6 +54,9 @@ const CATEGORY_ORDER_EXPRESSION = `
     WHEN '13k' THEN 4
     WHEN '27k' THEN 5
     WHEN '56k' THEN 6
+    WHEN '68k' THEN 7
+    WHEN '224k' THEN 8
+    WHEN '1.4m' THEN 9
     ELSE 999
   END`;
 
@@ -64,6 +68,9 @@ const CATEGORY_ORDER_EXPRESSION_CC = `
     WHEN '13k' THEN 4
     WHEN '27k' THEN 5
     WHEN '56k' THEN 6
+    WHEN '68k' THEN 7
+    WHEN '224k' THEN 8
+    WHEN '1.4m' THEN 9
     ELSE 999
   END`;
 
@@ -74,6 +81,7 @@ async function activeCategories(pool) {
 function createDashboardRouter({ pool, config }) {
   const router = express.Router();
   const adminRepository = new AdminRepository(pool);
+  const usageReporting = new UsageReportingService(pool);
   router.use(ensureCsrf);
 
   router.get('/login', (req, res) => res.send(layout('Login', `<section class="card narrow login-card"><div class="eyebrow">SECURE NODE ACCESS</div><h1>Administrator login</h1><p class="muted">Authenticate to manage inventory and inspect the immutable event ledger.</p><form method="post" action="/login"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Username<input name="username" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button>Connect to dashboard</button></form></section>`)));
@@ -93,24 +101,14 @@ function createDashboardRouter({ pool, config }) {
   router.get('/dashboard', async (req, res, next) => {
     try {
       const categories = await activeCategories(pool);
-      const inventory = (await pool.query(
-        `SELECT cc.category,cc.display_name,
-          count(c.id) FILTER (WHERE c.status='unused')::int unused,
-          count(c.id) FILTER (WHERE c.status='used')::int used,
-          count(c.id) FILTER (WHERE c.delivery_status='failed')::int failed
-         FROM code_categories cc LEFT JOIN codes c ON c.category=cc.category
-         WHERE cc.active=TRUE GROUP BY cc.category,cc.display_name ORDER BY ${CATEGORY_ORDER_EXPRESSION_CC}`
-      )).rows;
+      const inventory = await usageReporting.inventory();
+      const resetAt = await usageReporting.getResetAt();
       const totals = inventory.reduce((result, row) => ({
         unused: result.unused + row.unused,
         used: result.used + row.used,
         failed: result.failed + row.failed
       }), { unused: 0, used: 0, failed: 0 });
-      const recent = (await pool.query(
-        `SELECT a.id,a.action,a.category,a.created_at,a.delivery_status,c.code
-         FROM audit_logs a LEFT JOIN codes c ON c.id=a.code_id
-         ORDER BY a.id DESC LIMIT 6`
-      )).rows;
+      const recent = [];
       const inventoryRows = inventory.map((row) => `<tr><td><span class="category-token">${escapeHtml(row.display_name)}</span></td><td class="metric positive">${row.unused}</td><td class="metric">${row.used}</td><td class="metric ${row.failed ? 'negative' : ''}">${row.failed}</td><td>${row.unused + row.used}</td></tr>`);
       const recentBlocks = recent.map((event) => `<article class="ledger-block"><div class="block-index">BLOCK #${event.id}</div><div><strong>${escapeHtml(event.action.replaceAll('_', ' '))}</strong><small>${timestamp(event.created_at)} · ${escapeHtml(event.category || 'system')}</small></div><div>${escapeHtml(maskCode(event.code))}</div><div>${badge(event.delivery_status || 'recorded')}</div></article>`).join('') || '<p class="empty-state">The ledger has no events yet.</p>';
       const options = categories.map((item) => `<option value="${escapeHtml(item.category)}">${escapeHtml(item.display_name)}</option>`).join('');
@@ -118,7 +116,19 @@ function createDashboardRouter({ pool, config }) {
         <section class="hero"><div><div class="eyebrow">LIVE DISTRIBUTION NODE</div><h1>Code inventory</h1><p>Manage stock and trace every code from import to WhatsApp delivery.</p></div><div class="node-status"><span></span> DATABASE ONLINE</div></section>
         <section class="stats-grid"><article><span>Available supply</span><strong>${totals.unused}</strong><small>Ready to issue</small></article><article><span>Codes consumed</span><strong>${totals.used}</strong><small>Recorded on ledger</small></article><article><span>Delivery alerts</span><strong>${totals.failed}</strong><small>Require review</small></article><article><span>Active categories</span><strong>${categories.length}</strong><small>Configured networks</small></article></section>
         <section class="dashboard-grid"><section class="panel inventory-panel"><div class="section-heading"><div><div class="eyebrow">SUPPLY BY NETWORK</div><h2>Inventory matrix</h2></div><a href="/dashboard/codes">View code lifecycle →</a></div>${table(['Category','Available','Used','Failed','Total'], inventoryRows)}</section><aside class="panel import-panel"><div class="eyebrow">MINT INVENTORY</div><h2>Add multiple codes</h2><p class="muted">Choose one category, then paste one code per line. Numbered lists are accepted automatically.</p><form method="post" action="/dashboard/import"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Code category<select name="category" required>${options}</select></label><label>Codes<textarea name="codes" rows="14" required spellcheck="false" placeholder="code1&#10;code2&#10;code3"></textarea></label><button type="submit">Add codes to inventory</button><small>Duplicate codes are skipped. Complete code values never appear in dashboard history.</small></form></aside><section class="panel history-panel"><div class="section-heading"><div><div class="eyebrow">LATEST BLOCKS</div><h2>Recent ledger activity</h2></div><a href="/dashboard/audit">Open full ledger →</a></div><div class="ledger-chain">${recentBlocks}</div></section></section>`;
-      res.send(layout('Inventory', content, req.session.csrfToken));
+      const reportingContent = `
+        <section class="hero"><div><div class="eyebrow">LIVE DISTRIBUTION NODE</div><h1>Code inventory</h1><p>Manage stock and monitor usage since the latest reporting reset.</p></div><div class="node-status"><span></span> DATABASE ONLINE</div></section>
+        <section class="stats-grid"><article><span>Available supply</span><strong>${totals.unused}</strong><small>Ready to issue</small></article><article><span>Codes consumed</span><strong>${totals.used}</strong><small>Since reporting reset</small></article><article><span>Delivery alerts</span><strong>${totals.failed}</strong><small>Require review</small></article><article><span>Active categories</span><strong>${categories.length}</strong><small>Configured networks</small></article></section>
+        <section class="reset-panel panel"><div><div class="eyebrow">REPORTING BASELINE</div><h2>Usage counters</h2><p class="muted">Counters started ${timestamp(resetAt)}. Resetting never returns issued codes to inventory.</p></div><form method="post" action="/dashboard/usage/reset"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><button class="danger" type="submit">Reset all usage counters</button></form></section>
+        <section class="dashboard-grid"><section class="panel inventory-panel"><div class="section-heading"><div><div class="eyebrow">SUPPLY BY NETWORK</div><h2>Inventory matrix</h2></div><a href="/dashboard/codes">View code lifecycle</a></div>${table(['Category','Available','Used','Failed','Total'], inventoryRows)}</section><aside class="panel import-panel"><div class="eyebrow">MINT INVENTORY</div><h2>Add multiple codes</h2><p class="muted">Choose one category, then paste one code per line. Numbered lists are accepted automatically.</p><form method="post" action="/dashboard/import"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Code category<select name="category" required>${options}</select></label><label>Codes<textarea name="codes" rows="14" required spellcheck="false" placeholder="code1&#10;code2&#10;code3"></textarea></label><button type="submit">Add codes to inventory</button><small>Duplicate codes are skipped. Complete code values never appear in dashboard history.</small></form></aside></section>`;
+      res.send(layout('Inventory', reportingContent, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/usage/reset', verifyCsrf, async (_req, res, next) => {
+    try {
+      await usageReporting.reset();
+      res.redirect('/dashboard');
     } catch (error) { next(error); }
   });
 
@@ -238,6 +248,25 @@ function createDashboardRouter({ pool, config }) {
       const updated = await pool.query('UPDATE allowed_groups SET active=$2,updated_at=NOW() WHERE group_id=$1 RETURNING group_id', [req.body.group_id, active]);
       if (updated.rowCount) await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', [active ? 'group_enabled' : 'group_disabled', req.body.group_id]);
       res.redirect('/dashboard/groups');
+    } catch (error) { next(error); }
+  });
+
+  router.get('/dashboard/audit', async (req, res, next) => {
+    try {
+      const groups = await usageReporting.listGroups();
+      const requestedGroupId = String(req.query.group || '').trim();
+      const selectedGroup = groups.find((group) => group.group_id === requestedGroupId) || null;
+      const resetAt = await usageReporting.getResetAt();
+      const options = groups.map((group) => `<option value="${escapeHtml(group.group_id)}" ${selectedGroup?.group_id === group.group_id ? 'selected' : ''}>${escapeHtml(group.group_name)}${group.active ? '' : ' (disabled)'}</option>`).join('');
+      let summary = '<section class="panel"><p class="empty-state">Select a group to view its code usage since the latest reset.</p></section>';
+      if (selectedGroup) {
+        const usage = await usageReporting.groupUsage(selectedGroup.group_id);
+        const total = usage.reduce((sum, row) => sum + Number(row.used), 0);
+        const rows = usage.map((row) => `<tr><td><span class="category-token">${escapeHtml(row.display_name)}</span></td><td class="metric">${row.used}</td></tr>`);
+        summary = `<section class="panel"><div class="section-heading"><div><div class="eyebrow">GROUP USAGE</div><h2>${escapeHtml(selectedGroup.group_name)}</h2></div><strong>${total} codes requested</strong></div>${table(['Category','Codes requested'], rows)}<p class="muted">Usage counted since ${timestamp(resetAt)}.</p></section>`;
+      }
+      const selector = `<form class="filters" method="get" action="/dashboard/audit"><label>WhatsApp group<select name="group" required><option value="">Select a group</option>${options}</select></label><button type="submit">Show group usage</button></form>`;
+      res.send(layout('Group usage', `<section class="hero compact"><div><div class="eyebrow">USAGE REPORT</div><h1>Group code usage</h1><p>Select a WhatsApp group to see how many codes it requested after the latest dashboard reset.</p></div></section>${selector}${summary}`, req.session.csrfToken));
     } catch (error) { next(error); }
   });
 
