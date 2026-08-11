@@ -98,12 +98,14 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         const responseLines = [
           'AWAN E-STORE',
           '',
+          '🎉 Start To Work 🎉',
           expressionLine,
           `Cur Total: ${formatAmount(calculation.amount)}`,
+          '',
           `All Total:${formatAmount(result.currentTotal)}`
         ];
         if (new Decimal(result.currentTotal).isZero()) {
-          responseLines.push('Thanks! All calculations are complete.');
+          responseLines.push('', '✅ Thanks! All clear.');
         }
         await sleep(randomDelayMs(3, 6, random));
         await message.reply(responseLines.join('\n'));
