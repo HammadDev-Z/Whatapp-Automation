@@ -22,8 +22,8 @@ class UsageReportingService {
     return result.rows[0]?.reset_at || new Date(0);
   }
 
-  async reset() {
-    const result = await this.pool.query(
+  async reset(executor = this.pool) {
+    const result = await executor.query(
       `INSERT INTO usage_reporting_state(id,reset_at,updated_at)
        VALUES(1,NOW(),NOW())
        ON CONFLICT(id) DO UPDATE SET reset_at=NOW(),updated_at=NOW()

@@ -13,7 +13,7 @@ A production-oriented MVP that allocates one-time codes to authorized WhatsApp g
 - Atomically records the WhatsApp message and claims inventory with a PostgreSQL transaction and `FOR UPDATE SKIP LOCKED`.
 - Marks codes used/pending before attempting delivery. Uncertain or failed delivery stays used and appears in manual review.
 - Supports `/help`, administrator-only `/groupid`, `/stock <category>`, and `/status`.
-- Includes a session-protected, CSRF-protected dashboard for aggregate stock, multiline code entry, code lifecycle tracking, group toggles, masked audit data, and failed deliveries.
+- Includes a session-protected, CSRF-protected dashboard for resettable usage counters, per-group usage reports, aggregate stock, multiline code entry, code lifecycle tracking, group toggles, and failed deliveries.
 - Persists WhatsApp `LocalAuth`, emits structured logs without code values, rate-limits each group, reconnects safely, and shuts down gracefully.
 
 ## Requirements
@@ -73,6 +73,10 @@ npm run groups -- enable "120363000000000000@g.us"
 
 Messages from the bot, direct chats, malformed commands, and duplicate message IDs never allocate inventory. Rate limits are per group and configured with `GROUP_RATE_LIMIT` and `GROUP_RATE_WINDOW_MINUTES`.
 
+Dashboard administrators can open **Groups → Limit** to configure a separate 24-hour allowance for every category in every group. By default, each cycle runs from 12:00 PM Pakistan time until 12:00 PM the next day. **Reset limit time now** immediately starts a fresh 24-hour cycle for that group. When a request exceeds the remaining allowance, only the remaining quantity is issued. Once the allowance is exhausted, the bot reports that stock has ended for that group. Empty limit fields mean unlimited access.
+
+The Inventory dashboard's **Reset all usage counters** button also starts a fresh 24-hour limit cycle for every group at the same time.
+
 After a successful code delivery, the bot posts a low-stock alert only in the WhatsApp group configured by `LOW_STOCK_ALERT_GROUP_ID`. Thresholds are: `830`, `2320`, and `5150` below 10; `13k` below 4; and `27k` or `56k` below 2. Leave the setting empty to disable alerts.
 
 ## CSV imports
@@ -83,7 +87,7 @@ The only accepted columns are required `category` and `code` values (extra colum
 npm run import-codes -- .\path\to\codes.csv
 ```
 
-The dashboard accepts one or more codes pasted into a multiline field after selecting a category. Put one code on each line; numbered lists such as `1. CODE` are also accepted. Duplicate codes are skipped. Dashboard history and lifecycle pages show masked values rather than complete codes.
+The dashboard accepts one or more codes pasted into a multiline field after selecting a category. Put one code on each line; numbered lists such as `1. CODE` are also accepted. Duplicate codes are skipped. The Usage page reports category counts for a selected group since the latest reporting reset. Resetting usage changes only the reporting baseline; it never makes issued codes available again. Lifecycle pages continue to show masked values rather than complete codes.
 
 ## Docker Compose
 

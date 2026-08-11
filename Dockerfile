@@ -6,7 +6,8 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm ci --omit=dev
 COPY . .
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium NODE_ENV=production
-RUN mkdir -p /app/.wwebjs_auth /app/.wwebjs_cache && chown -R node:node /app
+RUN mkdir -p /app/.wwebjs_auth /app/.wwebjs_cache && chmod +x /app/docker-entrypoint.sh && chown -R node:node /app
 USER node
 EXPOSE 3000
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node","src/index.js"]

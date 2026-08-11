@@ -20,6 +20,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/whatsapp_codes
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
     ports:
       - "3000:3000"
     volumes:

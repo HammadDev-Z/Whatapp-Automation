@@ -8,6 +8,7 @@ const { maskCode } = require('../utilities/mask');
 const { importCodeLines } = require('../services/code-importer');
 const { AdminRepository } = require('../services/admin-repository');
 const { UsageReportingService } = require('../services/usage-reporting');
+const { GroupLimitRepository } = require('../services/group-limit-repository');
 
 function table(headers, rows, className = '') {
   return `<div class="table-wrap ${escapeHtml(className)}"><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${headers.length}" class="empty-state">No records found</td></tr>`}</tbody></table></div>`;
@@ -82,6 +83,7 @@ function createDashboardRouter({ pool, config }) {
   const router = express.Router();
   const adminRepository = new AdminRepository(pool);
   const usageReporting = new UsageReportingService(pool);
+  const groupLimits = new GroupLimitRepository(pool);
   router.use(ensureCsrf);
 
   router.get('/login', (req, res) => res.send(layout('Login', `<section class="card narrow login-card"><div class="eyebrow">SECURE NODE ACCESS</div><h1>Administrator login</h1><p class="muted">Authenticate to manage inventory and inspect the immutable event ledger.</p><form method="post" action="/login"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Username<input name="username" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button>Connect to dashboard</button></form></section>`)));
@@ -126,10 +128,20 @@ function createDashboardRouter({ pool, config }) {
   });
 
   router.post('/dashboard/usage/reset', verifyCsrf, async (_req, res, next) => {
+    let client;
     try {
-      await usageReporting.reset();
+      client = await pool.connect();
+      await client.query('BEGIN');
+      await usageReporting.reset(client);
+      await groupLimits.resetAllWindows(client);
+      await client.query('COMMIT');
       res.redirect('/dashboard');
-    } catch (error) { next(error); }
+    } catch (error) {
+      if (client) await client.query('ROLLBACK');
+      next(error);
+    } finally {
+      client?.release();
+    }
   });
 
   router.post('/dashboard/import', verifyCsrf, async (req, res, next) => {
@@ -171,7 +183,7 @@ function createDashboardRouter({ pool, config }) {
   router.get('/dashboard/groups', async (req, res, next) => {
     try {
       const groups = (await pool.query('SELECT * FROM allowed_groups ORDER BY group_name')).rows;
-      const rows = groups.map((group) => `<tr><td>${escapeHtml(group.group_name)}</td><td><code>${escapeHtml(group.group_id)}</code></td><td>${badge(group.active ? 'active' : 'disabled')}</td><td><form method="post" action="/dashboard/groups/toggle"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}"><input type="hidden" name="active" value="${group.active ? 'false' : 'true'}"><button class="small-button ${group.active ? 'danger' : ''}">${group.active ? 'Disable' : 'Enable'}</button></form></td></tr>`);
+      const rows = groups.map((group) => `<tr><td>${escapeHtml(group.group_name)}</td><td><code>${escapeHtml(group.group_id)}</code></td><td>${badge(group.active ? 'active' : 'disabled')}</td><td><div class="group-actions"><a class="button secondary" href="/dashboard/groups/limits?group=${encodeURIComponent(group.group_id)}">Limit</a><form method="post" action="/dashboard/groups/toggle"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}"><input type="hidden" name="active" value="${group.active ? 'false' : 'true'}"><button class="small-button ${group.active ? 'danger' : ''}">${group.active ? 'Disable' : 'Enable'}</button></form></div></td></tr>`);
       const addGroupForm = `
         <section id="group-add" class="card narrow group-add-card">
           <div class="eyebrow">REGISTER GROUP</div>
@@ -186,6 +198,50 @@ function createDashboardRouter({ pool, config }) {
         </section>
       `;
       res.send(layout('Groups', `<section class="hero compact"><div><div class="eyebrow">ACCESS CONTROL</div><h1>Authorized groups</h1><p>Only active groups can consume inventory.</p></div><a href="#group-add" class="button">Add group</a></section>${addGroupForm}${table(['Name','Group ID','State','Action'], rows)}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.get('/dashboard/groups/limits', async (req, res, next) => {
+    try {
+      const groupId = String(req.query.group || '').trim();
+      const group = await groupLimits.getGroup(groupId);
+      if (!group) return res.status(404).send(layout('Group not found', '<section class="card narrow"><h1>Group not found</h1><a class="button secondary" href="/dashboard/groups">Back</a></section>', req.session.csrfToken));
+      const limits = await groupLimits.listForGroup(groupId);
+      const windowStart = await groupLimits.getWindowStart(groupId);
+      const rows = limits.map((item) => `<tr><td><span class="category-token">${escapeHtml(item.display_name)}</span></td><td>${item.used_last_24h}</td><td><input type="number" min="1" step="1" name="limit_${escapeHtml(item.category)}" value="${item.daily_limit || ''}" placeholder="No limit"></td></tr>`);
+      const form = `<form method="post" action="/dashboard/groups/limits"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}">${table(['Category','Used in current cycle','24-hour limit'], rows)}<div class="form-actions"><a class="button secondary" href="/dashboard/groups">Back</a><button type="submit">Save limits</button></div></form>`;
+      const resetForm = `<form method="post" action="/dashboard/groups/limits/reset"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}"><button class="danger" type="submit">Reset limit time now</button></form>`;
+      res.send(layout('Group limits', `<section class="hero compact"><div><div class="eyebrow">24-HOUR ALLOWANCE</div><h1>${escapeHtml(group.group_name)}</h1><p>By default, limits reset daily at 12:00 PM Pakistan time. This group's current cycle started ${timestamp(windowStart)}.</p></div>${resetForm}</section>${form}`, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/groups/limits', verifyCsrf, async (req, res, next) => {
+    try {
+      const groupId = String(req.body.group_id || '').trim();
+      const group = await groupLimits.getGroup(groupId);
+      if (!group) return res.status(404).send('Group not found');
+      const categories = await activeCategories(pool);
+      const limits = {};
+      for (const category of categories) {
+        const value = String(req.body[`limit_${category.category}`] || '').trim();
+        if (!value) continue;
+        if (!/^\d+$/.test(value) || Number(value) <= 0 || !Number.isSafeInteger(Number(value))) {
+          return res.status(400).send(layout('Invalid limit', `<section class="card narrow"><h1>Invalid limit</h1><p>Limits must be positive whole numbers.</p><a class="button secondary" href="/dashboard/groups/limits?group=${encodeURIComponent(groupId)}">Back</a></section>`, req.session.csrfToken));
+        }
+        limits[category.category] = Number(value);
+      }
+      await groupLimits.save(groupId, limits);
+      res.redirect(`/dashboard/groups/limits?group=${encodeURIComponent(groupId)}`);
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/groups/limits/reset', verifyCsrf, async (req, res, next) => {
+    try {
+      const groupId = String(req.body.group_id || '').trim();
+      const group = await groupLimits.getGroup(groupId);
+      if (!group) return res.status(404).send('Group not found');
+      await groupLimits.resetWindow(groupId);
+      res.redirect(`/dashboard/groups/limits?group=${encodeURIComponent(groupId)}`);
     } catch (error) { next(error); }
   });
 

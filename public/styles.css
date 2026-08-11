@@ -1,18 +1,18 @@
 ﻿:root {
   font-family: 'Segoe UI', system-ui, sans-serif;
-  color: #e8fdf4;
-  background: #06121d;
-  --bg: #06121d;
-  --panel: rgba(8, 20, 34, 0.94);
-  --panel-border: rgba(48, 207, 171, 0.16);
-  --line: rgba(72, 215, 172, 0.22);
-  --muted: #8bc7cd;
-  --blue: #5cc8ff;
-  --green: #53f0c0;
-  --cyan: #7cd6ff;
-  --accent: #35c698;
-  --danger: #ff6375;
-  --shadow: 0 24px 80px rgba(3, 11, 22, 0.25);
+  color: #fff1fa;
+  background: #160b24;
+  --bg: #160b24;
+  --panel: rgba(38, 14, 52, 0.94);
+  --panel-border: rgba(224, 74, 154, 0.22);
+  --line: rgba(184, 92, 255, 0.28);
+  --muted: #d3a7d8;
+  --blue: #bb78ff;
+  --green: #ff5eab;
+  --cyan: #ff8ac7;
+  --accent: #a855f7;
+  --danger: #ff4d6d;
+  --shadow: 0 24px 80px rgba(22, 4, 34, 0.42);
   --mono: Consolas, 'Cascadia Mono', ui-monospace, monospace;
 }
 
@@ -33,12 +33,13 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: radial-gradient(circle at top right, rgba(92, 200, 255, 0.12), transparent 26rem),
+  background: radial-gradient(circle at top right, rgba(192, 72, 255, 0.22), transparent 28rem),
+    radial-gradient(circle at bottom left, rgba(255, 64, 112, 0.16), transparent 30rem),
     linear-gradient(#ffffff05 1px, transparent 1px),
     linear-gradient(90deg, #ffffff05 1px, transparent 1px),
     var(--bg);
-  background-size: auto, 42px 42px, 42px 42px;
-  color: #e9fbf7;
+  background-size: auto, auto, 42px 42px, 42px 42px;
+  color: #fff1fa;
 }
 
 body::before {
@@ -46,7 +47,7 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(135deg, transparent 22%, rgba(37, 209, 171, 0.12) 42%, transparent 68%);
+  background: linear-gradient(135deg, transparent 22%, rgba(168, 85, 247, 0.16) 44%, transparent 70%);
 }
 
 a {
@@ -70,8 +71,8 @@ header {
   width: min(1140px, 100%);
   margin: 0 auto;
   padding: 0.75rem clamp(1rem, 4vw, 1.5rem);
-  background: rgba(7, 16, 27, 0.92);
-  border-bottom: 1px solid rgba(72, 215, 172, 0.12);
+  background: rgba(27, 10, 40, 0.94);
+  border-bottom: 1px solid rgba(224, 74, 154, 0.2);
   backdrop-filter: blur(14px);
 }
 
@@ -79,7 +80,7 @@ header {
   display: flex;
   align-items: center;
   gap: 0.85rem;
-  color: #f2fff9;
+  color: #fff3fb;
 }
 
 .brand-mark {
@@ -120,8 +121,8 @@ header nav > a,
   padding: 0.55rem 0.85rem;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(11, 23, 37, 0.82);
-  color: #c5eaf3;
+  background: rgba(47, 18, 62, 0.86);
+  color: #edc9ef;
   font: 600 0.72rem var(--mono);
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -132,8 +133,8 @@ header nav > a,
 header nav > a:hover,
 .nav-button:hover {
   color: #fff;
-  background: rgba(39, 198, 160, 0.14);
-  border-color: rgba(72, 215, 172, 0.28);
+  background: rgba(224, 74, 154, 0.2);
+  border-color: rgba(187, 120, 255, 0.4);
   transform: translateY(-1px);
 }
 
@@ -152,7 +153,7 @@ footer {
   width: min(1140px, 100%);
   margin: 0 auto;
   padding: 0.9rem clamp(0.9rem, 3vw, 1.5rem);
-  border-top: 1px solid rgba(72, 215, 172, 0.14);
+  border-top: 1px solid rgba(224, 74, 154, 0.2);
   color: var(--muted);
   font: 500 0.78rem var(--mono);
 }
@@ -441,6 +442,23 @@ button.danger:hover,
   margin: 0.25rem 0;
 }
 
+.group-actions,
+.form-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.group-actions form {
+  margin: 0;
+}
+
+.form-actions {
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
 input,
 select,
 textarea {
@@ -526,6 +544,11 @@ ul.usage-summary li {
 }
 
 @media (max-width: 1080px) {
+  .reset-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   section.stats-grid {
     grid-template-columns: 1fr;
   }

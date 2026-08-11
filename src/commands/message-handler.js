@@ -95,12 +95,18 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         const expressionLine = calculation.type === 'adjustment'
           ? formatAmount(calculation.amount)
           : `① ${calculation.expression}=${formatAmount(calculation.amount)}`;
-        await message.reply([
-          '🎉 CALCULATION 🎉',
+        const responseLines = [
+          'AWAN E-STORE',
+          '',
           expressionLine,
           `Cur Total: ${formatAmount(calculation.amount)}`,
           `All Total:${formatAmount(result.currentTotal)}`
-        ].join('\n'));
+        ];
+        if (new Decimal(result.currentTotal).isZero()) {
+          responseLines.push('Thanks! All calculations are complete.');
+        }
+        await sleep(randomDelayMs(3, 6, random));
+        await message.reply(responseLines.join('\n'));
         return;
       }
       logger.info('WhatsApp command received', { command: command.name, category: command.category, quantity: command.quantity, groupId, messageId });
@@ -159,6 +165,10 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
       logger.info('Code allocation finished', { category, groupId, messageId, allocationStatus: allocation.status });
       if (allocation.status === 'duplicate') return;
       if (allocation.status === 'unauthorized') { await message.reply('❌ This group is not authorized to request codes.'); return; }
+      if (allocation.status === 'limit_reached') {
+        await message.reply(`❌ ${category} stock ended`);
+        return;
+      }
       if (allocation.status === 'out_of_stock') {
         const available = allocation.availableQuantity || 0;
         await message.reply(available
@@ -186,7 +196,13 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           await allocationService.recordDelivery({ codeIds: issued.map((item) => item.codeId), category, groupId, requestedBy: sender, messageId, success: false, error });
         } catch (auditError) { logger.error('Failed to record delivery failure', { messageId, groupId, error: auditError }); }
       }
-      if (delivered && allocation.partial) {
+      if (delivered && allocation.limitReached) {
+        try {
+          await message.reply(`❌ ${category} stock ended`);
+        } catch (error) {
+          logger.warn?.('Failed to send group limit notice', { messageId, groupId, error });
+        }
+      } else if (delivered && allocation.partial) {
         try {
           await message.reply(`❌ ${category} stock is finished. ${issued.length} codes were issued out of ${allocation.requestedQuantity} requested.`);
         } catch (error) {
