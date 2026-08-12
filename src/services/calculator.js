@@ -4,9 +4,9 @@ const Decimal = require('decimal.js');
 
 const NUMBER = '(?:\\d+(?:\\.\\d+)?|\\.\\d+)';
 const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
-// Only calculation-only messages match. Unicode escapes avoid source-encoding
-// problems while allowing both keyboard and phone calculator symbols.
-const OPERATOR = '[+*/\\-\\u00d7\\u00f7]';
+// Multiplication deliberately accepts only `*`; plain `x` may be part of the
+// bot's inventory shorthand and must never be interpreted as arithmetic.
+const OPERATOR = '[+*/\\-\\u00f7]';
 const EXPRESSION_PATTERN = new RegExp(`^${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
 const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
 
@@ -14,7 +14,7 @@ function evaluateExpression(text) {
   const tokens = text.match(TOKEN_PATTERN);
   const values = [new Decimal(tokens[0])];
   const operators = [];
-  const precedence = { '+': 1, '-': 1, '*': 2, '\u00d7': 2, '/': 2, '\u00f7': 2 };
+  const precedence = { '+': 1, '-': 1, '*': 2, '/': 2, '\u00f7': 2 };
 
   function applyOperation() {
     const operator = operators.pop();
@@ -25,7 +25,6 @@ function evaluateExpression(text) {
       '+': () => left.plus(right),
       '-': () => left.minus(right),
       '*': () => left.times(right),
-      '\u00d7': () => left.times(right),
       '/': () => left.dividedBy(right),
       '\u00f7': () => left.dividedBy(right)
     };

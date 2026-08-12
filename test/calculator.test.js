@@ -12,8 +12,7 @@ const cases = [
   ['90.29/3', '30.10'],
   ['90.38\u00f75', '18.08'],
   ['2560+32+487-273', '2806.00'],
-  ['2+3*4-10/5', '12.00'],
-  ['4\u00d76+2', '26.00']
+  ['2+3*4-10/5', '12.00']
 ];
 
 for (const [expression, expected] of cases) {
@@ -27,6 +26,12 @@ for (const [expression, expected] of cases) {
 
 test('ignores messages that contain text', () => {
   assert.equal(parseCalculation('please calculate 10+20'), null);
+});
+
+test('does not use x or the multiplication sign as multiplication', () => {
+  assert.equal(parseCalculation('5150x1'), null);
+  assert.equal(parseCalculation('5150X1'), null);
+  assert.equal(parseCalculation('5150\u00d71'), null);
 });
 
 test('rejects division by zero', () => {
