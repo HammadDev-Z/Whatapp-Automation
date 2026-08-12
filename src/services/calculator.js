@@ -4,26 +4,30 @@ const Decimal = require('decimal.js');
 
 const NUMBER = '(?:\\d+(?:\\.\\d+)?|\\.\\d+)';
 const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
-const EXPRESSION_PATTERN = new RegExp(`^${NUMBER}(?:\\s*[+*/÷-]\\s*${NUMBER})+$`);
-const TOKEN_PATTERN = new RegExp(`${NUMBER}|[+*/÷-]`, 'g');
+// Only calculation-only messages match. Unicode escapes avoid source-encoding
+// problems while allowing both keyboard and phone calculator symbols.
+const OPERATOR = '[+*/\\-\\u00d7\\u00f7]';
+const EXPRESSION_PATTERN = new RegExp(`^${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
+const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
 
 function evaluateExpression(text) {
   const tokens = text.match(TOKEN_PATTERN);
   const values = [new Decimal(tokens[0])];
   const operators = [];
-  const precedence = { '+': 1, '-': 1, '*': 2, '/': 2, '÷': 2 };
+  const precedence = { '+': 1, '-': 1, '*': 2, '\u00d7': 2, '/': 2, '\u00f7': 2 };
 
   function applyOperation() {
     const operator = operators.pop();
     const right = values.pop();
     const left = values.pop();
-    if ((operator === '/' || operator === '÷') && right.isZero()) return false;
+    if ((operator === '/' || operator === '\u00f7') && right.isZero()) return false;
     const operations = {
       '+': () => left.plus(right),
       '-': () => left.minus(right),
       '*': () => left.times(right),
+      '\u00d7': () => left.times(right),
       '/': () => left.dividedBy(right),
-      '÷': () => left.dividedBy(right)
+      '\u00f7': () => left.dividedBy(right)
     };
     values.push(operations[operator]());
     return true;
