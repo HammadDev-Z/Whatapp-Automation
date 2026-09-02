@@ -68,13 +68,26 @@ async function resolveSender(message, timeoutMs = 2000) {
   }
 }
 
-async function resolveGroupName(message) {
+async function resolveGroupName(message, logger) {
   try {
-    if (typeof message.getChat !== 'function') return null;
+    if (typeof message.getChat !== 'function') {
+      logger?.warn?.('resolveGroupName: message.getChat is unavailable', { from: message.from });
+      return null;
+    }
     const chat = await message.getChat();
-    const name = chat && typeof chat.name === 'string' ? chat.name.trim() : '';
-    return name || null;
-  } catch {
+    const candidate = chat && (chat.name || chat.formattedTitle || chat.subject || chat.groupMetadata?.subject);
+    const name = typeof candidate === 'string' ? candidate.trim() : '';
+    if (!name) {
+      logger?.warn?.('resolveGroupName: chat has no usable name', {
+        from: message.from,
+        isGroup: chat?.isGroup,
+        keys: chat ? Object.keys(chat).join(',') : null
+      });
+      return null;
+    }
+    return name;
+  } catch (error) {
+    logger?.warn?.('resolveGroupName: getChat failed', { from: message.from, error });
     return null;
   }
 }
@@ -94,6 +107,8 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
     try {
       const sender = message.author || message.from;
       if (calculation) {
+        const groupName = await resolveGroupName(message, logger);
+        logger.info('Calculation received', { groupId, messageId, type: calculation.type, groupName: groupName || null });
         const result = await calculationRepository.record({
           groupId,
           messageId,
@@ -101,7 +116,7 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           expression: calculation.expression,
           amount: calculation.amount,
           type: calculation.type,
-          groupName: await resolveGroupName(message)
+          groupName
         });
         if (result.duplicate) return;
         const expressionLine = calculation.type === 'adjustment'
