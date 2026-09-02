@@ -4,7 +4,7 @@ const { parseCommand } = require('../utilities/commands');
 const { parseCalculation } = require('../services/calculator');
 const Decimal = require('decimal.js');
 
-const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock - all remaining stock (admin)\n/stock <category> - category stock (admin)\n/status - service status (admin)';
+const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock - all remaining stock (admin)\n/stock <category> - category stock (admin)\n/status - service status (admin)\n/setname <name> - label this group for /calculate (admin)';
 
 function serializeWid(value) {
   if (!value) return '';
@@ -68,32 +68,23 @@ async function resolveSender(message, timeoutMs = 2000) {
   }
 }
 
-async function resolveGroupName(message, logger) {
+// Best-effort. whatsapp-web.js `getChat()` is known to throw against some WhatsApp Web
+// builds; when it does we return null and fall back to a name set via `/setname`.
+async function resolveGroupName(message) {
   try {
-    if (typeof message.getChat !== 'function') {
-      logger?.warn?.('resolveGroupName: message.getChat is unavailable', { from: message.from });
-      return null;
-    }
+    if (typeof message.getChat !== 'function') return null;
     const chat = await message.getChat();
     const candidate = chat && (chat.name || chat.formattedTitle || chat.subject || chat.groupMetadata?.subject);
     const name = typeof candidate === 'string' ? candidate.trim() : '';
-    if (!name) {
-      logger?.warn?.('resolveGroupName: chat has no usable name', {
-        from: message.from,
-        isGroup: chat?.isGroup,
-        keys: chat ? Object.keys(chat).join(',') : null
-      });
-      return null;
-    }
-    return name;
-  } catch (error) {
-    logger?.warn?.('resolveGroupName: getChat failed', { from: message.from, error });
+    return name || null;
+  } catch {
     return null;
   }
 }
 
 function createMessageHandler({ allocationService, categoryRepository, calculationRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
   const inFlight = new Set();
+  const groupNameWarned = new Set();
 
   return async function handleMessage(message) {
     if (!message || message.fromMe || !String(message.from || '').endsWith('@g.us')) return;
@@ -107,8 +98,11 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
     try {
       const sender = message.author || message.from;
       if (calculation) {
-        const groupName = await resolveGroupName(message, logger);
-        logger.info('Calculation received', { groupId, messageId, type: calculation.type, groupName: groupName || null });
+        const groupName = await resolveGroupName(message);
+        if (!groupName && !groupNameWarned.has(groupId)) {
+          groupNameWarned.add(groupId);
+          logger.warn?.('Could not auto-detect group name; run /setname <name> in this group', { groupId });
+        }
         const result = await calculationRepository.record({
           groupId,
           messageId,
@@ -161,7 +155,7 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         await message.reply(['📊 GROUP CALCULATION STATUS', '', ...lines, '', `Grand Total: ${formatAmount(grandTotal)}`].join('\n'));
         return;
       }
-      if (['groupid', 'stock', 'status'].includes(command.name)) {
+      if (['groupid', 'stock', 'status', 'setname'].includes(command.name)) {
         const adminSender = await resolveSender(message);
         const allowed = await Promise.resolve(isAdmin(adminSender));
         if (!allowed) {
@@ -169,6 +163,13 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         }
       }
       if (command.name === 'groupid') { await message.reply(`Group ID: ${groupId}`); return; }
+      if (command.name === 'setname') {
+        if (!command.groupName) { await message.reply('Usage: /setname <name>   (or from the report group: /setname <id>@g.us <name>)'); return; }
+        const target = command.targetGroupId || groupId;
+        await calculationRepository.setGroupName(target, command.groupName);
+        await message.reply(`✅ Saved "${command.groupName}"${command.targetGroupId ? ` for ${target}` : ''} — it will show in /calculate.`);
+        return;
+      }
       if (command.name === 'status') {
         try { await pool.query('SELECT 1'); await message.reply('✅ Bot and database are online.'); }
         catch { await message.reply('❌ Database is unavailable.'); }

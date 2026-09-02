@@ -48,6 +48,17 @@ class CalculationRepository {
     }
   }
 
+  async setGroupName(groupId, groupName) {
+    const name = String(groupName || '').trim().slice(0, 100);
+    if (!name) return;
+    await this.pool.query(
+      `INSERT INTO calculation_balances(group_id, current_total, group_name)
+       VALUES($1, 0, $2)
+       ON CONFLICT(group_id) DO UPDATE SET group_name=$2, updated_at=NOW()`,
+      [groupId, name]
+    );
+  }
+
   async listBalances() {
     const result = await this.pool.query(
       `SELECT group_id, current_total, group_name

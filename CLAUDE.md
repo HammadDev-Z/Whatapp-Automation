@@ -69,8 +69,11 @@ Two message kinds, checked in this order:
    `CALCULATION_REPORT_GROUP_ID` (config `calculationReportGroupId`); it replies with every group's
    running `calculation_balances.current_total` plus a grand total. Anywhere else it is ignored.
    Calculations are not gated by `allowed_groups` — they run in any chat the bot is in — so the
-   group's display name is captured from `message.getChat()` on each calc and stored in
-   `calculation_balances.group_name` (migration 012) for `/calculate` to show.
+   group's display name is stored in `calculation_balances.group_name` (migration 012) for
+   `/calculate` to show. It is set two ways: best-effort auto from `message.getChat()` on each
+   calc (**this throws on some WhatsApp Web builds — `resolveGroupName` swallows it and returns
+   null**), and the admin command `/setname <name>` (or, from the report group,
+   `/setname <id>@g.us <name>`) which writes it directly via `CalculationRepository.setGroupName`.
 
 Non-group chats, `fromMe`, unparseable messages, and duplicate message IDs never allocate.
 The bot sleeps a random delay before replying (`TAG_RESPONSE_DELAY_MIN/MAX_SECONDS`; 3–6s for

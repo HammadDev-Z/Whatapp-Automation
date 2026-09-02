@@ -13,7 +13,7 @@ test('parseCommand recognizes /calculate', () => {
   assert.equal(parseCommand('/calculate now'), null);
 });
 
-function buildHandler(balances, calcRepoOverrides = {}) {
+function buildHandler(balances, calcRepoOverrides = {}, { isAdmin = async () => false } = {}) {
   const replies = [];
   const handler = createMessageHandler({
     allocationService: {},
@@ -21,7 +21,7 @@ function buildHandler(balances, calcRepoOverrides = {}) {
     calculationRepository: { listBalances: async () => balances, ...calcRepoOverrides },
     stockMonitor: null,
     pool: {},
-    isAdmin: async () => false,
+    isAdmin,
     rateLimiter: { consume: () => true },
     calculationReportGroupId: REPORT_GROUP,
     sleep: async () => {},
@@ -106,4 +106,60 @@ test('a calculation stores the WhatsApp group name it was posted in', async () =
   assert.equal(recorded.groupName, 'Karachi Buyers');
   assert.equal(recorded.groupId, 'somerandomgroup@g.us');
   assert.match(replies[0], /All Total:30\.0/);
+});
+
+test('a calculation still records when getChat throws (name left null)', async () => {
+  let recorded = null;
+  const { handler } = buildHandler([], {
+    record: async (payload) => { recorded = payload; return { duplicate: false, currentTotal: '30.00' }; }
+  });
+  const msg = message('10+20', 'g@g.us', []);
+  msg.getChat = async () => { throw new Error('r'); };
+
+  await handler(msg);
+
+  assert.equal(recorded.groupName, null);
+});
+
+test('parseCommand parses /setname', () => {
+  assert.deepEqual(parseCommand('/setname Khan Group'), { name: 'setname', groupName: 'Khan Group' });
+  assert.deepEqual(parseCommand('/setname   Jerry   Store  '), { name: 'setname', groupName: 'Jerry Store' });
+  assert.deepEqual(parseCommand('/setname 120363111@g.us Faisalabad Dealers'),
+    { name: 'setname', targetGroupId: '120363111@g.us', groupName: 'Faisalabad Dealers' });
+  assert.deepEqual(parseCommand('/setname'), { name: 'setname' });
+});
+
+test('/setname from an admin stores the label for the current group', async () => {
+  let saved = null;
+  const { handler, replies } = buildHandler([], {
+    setGroupName: async (id, name) => { saved = { id, name }; }
+  }, { isAdmin: async () => true });
+
+  await handler(message('/setname Khan Group', 'khan@g.us', replies));
+
+  assert.deepEqual(saved, { id: 'khan@g.us', name: 'Khan Group' });
+  assert.match(replies[0], /Khan Group/);
+});
+
+test('/setname with an explicit id targets that group', async () => {
+  let saved = null;
+  const { handler, replies } = buildHandler([], {
+    setGroupName: async (id, name) => { saved = { id, name }; }
+  }, { isAdmin: async () => true });
+
+  await handler(message('/setname jerry@g.us Jerry Store', REPORT_GROUP, replies));
+
+  assert.deepEqual(saved, { id: 'jerry@g.us', name: 'Jerry Store' });
+});
+
+test('/setname is refused for non-admins', async () => {
+  let saved = null;
+  const { handler, replies } = buildHandler([], {
+    setGroupName: async (id, name) => { saved = { id, name }; }
+  }, { isAdmin: async () => false });
+
+  await handler(message('/setname Khan Group', 'khan@g.us', replies));
+
+  assert.equal(saved, null);
+  assert.match(replies[0], /administrator/i);
 });

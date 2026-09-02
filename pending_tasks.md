@@ -263,6 +263,12 @@ Severity tags: **[bug]** wrong behavior · **[incomplete]** half-built / missing
 
 ## Done
 
+- **2026-09-02** — `/calculate` group names: `message.getChat()` throws on the deployed
+  WhatsApp Web build (`error: "r"`), so auto-detection can't be relied on. Added `/setname <name>`
+  (admin, any group) and `/setname <id>@g.us <name>` (from the report group) →
+  `CalculationRepository.setGroupName`; auto-detect kept as silent best-effort with a one-time
+  per-group warn. Files: `src/utilities/commands.js`, `src/commands/message-handler.js`,
+  `src/services/calculation-repository.js`. Tests extended in `test/calculate-command.test.js`.
 - **2026-09-02** — Removed dead code/config: `multer` dependency + `uploads/` dir + its
   `.gitignore` / `.dockerignore` entries; `MAX_CSV_SIZE_MB` / `config.maxCsvSizeMb`; `LOG_LEVEL`
   env var; `makeAdminChecker` + `CATEGORY_PATTERN` export in `normalization.js`; the unused

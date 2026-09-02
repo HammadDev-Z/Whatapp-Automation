@@ -33,6 +33,14 @@ function parseCommand(body) {
   if (/^\/help\s*$/i.test(text)) return { name: 'help' };
   if (/^\/status\s*$/i.test(text)) return { name: 'status' };
   if (/^\/calculate\s*$/i.test(text)) return { name: 'calculate' };
+  match = text.match(/^\/setname\s+(.+)$/is);
+  if (match) {
+    const rest = match[1].replace(/\s+/g, ' ').trim();
+    const targeted = rest.match(/^(\S+@g\.us)\s+(.+)$/i);
+    if (targeted) return { name: 'setname', targetGroupId: targeted[1], groupName: targeted[2].trim().slice(0, 100) };
+    return { name: 'setname', groupName: rest.slice(0, 100) };
+  }
+  if (/^\/setname\s*$/i.test(text)) return { name: 'setname' };
   if (/^\/(?:tag|stock)\b/i.test(text) || INVALID_SHORTHAND_PATTERN.test(text)) return { name: 'invalid' };
   return null;
 }
