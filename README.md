@@ -181,7 +181,7 @@ Back up the `whatsapp_auth` Docker volume using your host/volume backup system w
 - `src/services/code-allocation.js` — atomic allocation and delivery outcome transaction logic
 - `src/commands/message-handler.js` — testable WhatsApp-independent command behavior
 - `src/bot/client.js` — `LocalAuth`, QR, lifecycle, reconnect events
-- `src/routes/dashboard.js` — dashboard, filters, upload, and group controls
+- `src/routes/dashboard.js` — dashboard, filters, code import, and group controls
 - `scripts/` — migrations, secure CSV import, and group management
 - `tests/` — unit coverage plus opt-in live PostgreSQL concurrency test
 

@@ -32,6 +32,7 @@ function parseCommand(body) {
   if (/^\/groupid\s*$/i.test(text)) return { name: 'groupid' };
   if (/^\/help\s*$/i.test(text)) return { name: 'help' };
   if (/^\/status\s*$/i.test(text)) return { name: 'status' };
+  if (/^\/calculate\s*$/i.test(text)) return { name: 'calculate' };
   if (/^\/(?:tag|stock)\b/i.test(text) || INVALID_SHORTHAND_PATTERN.test(text)) return { name: 'invalid' };
   return null;
 }

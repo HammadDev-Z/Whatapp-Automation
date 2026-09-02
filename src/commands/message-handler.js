@@ -68,7 +68,18 @@ async function resolveSender(message, timeoutMs = 2000) {
   }
 }
 
-function createMessageHandler({ allocationService, categoryRepository, calculationRepository, stockMonitor, lowStockAlertGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
+async function resolveGroupName(message) {
+  try {
+    if (typeof message.getChat !== 'function') return null;
+    const chat = await message.getChat();
+    const name = chat && typeof chat.name === 'string' ? chat.name.trim() : '';
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
+function createMessageHandler({ allocationService, categoryRepository, calculationRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
   const inFlight = new Set();
 
   return async function handleMessage(message) {
@@ -89,7 +100,8 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           sender,
           expression: calculation.expression,
           amount: calculation.amount,
-          type: calculation.type
+          type: calculation.type,
+          groupName: await resolveGroupName(message)
         });
         if (result.duplicate) return;
         const expressionLine = calculation.type === 'adjustment'
@@ -120,6 +132,18 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           return extra.length ? `${category} (also ${extra.join(', ')})` : category;
         });
         await message.reply(`${HELP}\n\nCategories: ${labels.join(', ')}`);
+        return;
+      }
+      if (command.name === 'calculate') {
+        // Restricted to one operator group configured via CALCULATION_REPORT_GROUP_ID.
+        // Anywhere else the command is silently ignored.
+        if (!calculationReportGroupId || groupId !== calculationReportGroupId) return;
+        const balances = await calculationRepository.listBalances();
+        await sleep(randomDelayMs(3, 6, random));
+        if (!balances.length) { await message.reply('📊 No group calculations have been recorded yet.'); return; }
+        const lines = balances.map((row) => `${row.group_name || row.group_id}: ${formatAmount(row.current_total)}`);
+        const grandTotal = balances.reduce((sum, row) => sum.plus(new Decimal(row.current_total)), new Decimal(0));
+        await message.reply(['📊 GROUP CALCULATION STATUS', '', ...lines, '', `Grand Total: ${formatAmount(grandTotal)}`].join('\n'));
         return;
       }
       if (['groupid', 'stock', 'status'].includes(command.name)) {
@@ -230,4 +254,4 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
   };
 }
 
-module.exports = { createMessageHandler, resolveSender, serializeMessageId, formatCodeList, randomDelayMs, HELP };
+module.exports = { createMessageHandler, resolveSender, resolveGroupName, serializeMessageId, formatCodeList, randomDelayMs, HELP };

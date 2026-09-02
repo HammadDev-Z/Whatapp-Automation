@@ -20,11 +20,11 @@ function loadConfig() {
     sessionSecret: process.env.SESSION_SECRET || '',
     groupRateLimit: number('GROUP_RATE_LIMIT', 5),
     groupRateWindowMinutes: number('GROUP_RATE_WINDOW_MINUTES', 10),
-    maxCsvSizeMb: number('MAX_CSV_SIZE_MB', 5),
     maxCodesPerRequest: number('MAX_CODES_PER_REQUEST', 50),
     tagResponseDelayMinSeconds: number('TAG_RESPONSE_DELAY_MIN_SECONDS', 5),
     tagResponseDelayMaxSeconds: number('TAG_RESPONSE_DELAY_MAX_SECONDS', 10),
     lowStockAlertGroupId: String(process.env.LOW_STOCK_ALERT_GROUP_ID || '').trim(),
+    calculationReportGroupId: String(process.env.CALCULATION_REPORT_GROUP_ID || '').trim(),
     reconnectDelayMs: number('WHATSAPP_RECONNECT_DELAY_MS', 10000)
   };
   if (config.tagResponseDelayMaxSeconds < config.tagResponseDelayMinSeconds) {
@@ -32,6 +32,9 @@ function loadConfig() {
   }
   if (config.lowStockAlertGroupId && !config.lowStockAlertGroupId.endsWith('@g.us')) {
     throw new Error('LOW_STOCK_ALERT_GROUP_ID must be a WhatsApp group ID ending in @g.us');
+  }
+  if (config.calculationReportGroupId && !config.calculationReportGroupId.endsWith('@g.us')) {
+    throw new Error('CALCULATION_REPORT_GROUP_ID must be a WhatsApp group ID ending in @g.us');
   }
   if (config.env === 'production' && (!config.adminPassword || config.adminPassword.includes('replace-'))) {
     throw new Error('A strong ADMIN_PASSWORD is required in production');

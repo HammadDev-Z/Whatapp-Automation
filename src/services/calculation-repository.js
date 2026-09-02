@@ -3,7 +3,7 @@
 class CalculationRepository {
   constructor(pool) { this.pool = pool; }
 
-  async record({ groupId, messageId, sender, expression, amount, type }) {
+  async record({ groupId, messageId, sender, expression, amount, type, groupName = null }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -17,11 +17,12 @@ class CalculationRepository {
       }
 
       const group = await client.query(
-        `INSERT INTO calculation_balances(group_id, current_total)
-         VALUES($1, 0)
-         ON CONFLICT(group_id) DO UPDATE SET updated_at=NOW()
+        `INSERT INTO calculation_balances(group_id, current_total, group_name)
+         VALUES($1, 0, $2)
+         ON CONFLICT(group_id) DO UPDATE SET updated_at=NOW(),
+           group_name=COALESCE(EXCLUDED.group_name, calculation_balances.group_name)
          RETURNING current_total`,
-        [groupId]
+        [groupId, groupName || null]
       );
       const balanceBefore = group.rows[0].current_total;
       const updated = await client.query(
@@ -45,6 +46,15 @@ class CalculationRepository {
     } finally {
       client.release();
     }
+  }
+
+  async listBalances() {
+    const result = await this.pool.query(
+      `SELECT group_id, current_total, group_name
+       FROM calculation_balances
+       ORDER BY COALESCE(group_name, group_id)`
+    );
+    return result.rows;
   }
 }
 

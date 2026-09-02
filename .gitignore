@@ -2,8 +2,6 @@ node_modules/
 .env
 .wwebjs_auth/
 .wwebjs_cache/
-uploads/*
-!uploads/.gitkeep
 coverage/
 npm-debug.log*
 *.log

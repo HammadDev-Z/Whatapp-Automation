@@ -21,7 +21,7 @@ async function main(){
  const stockMonitor=new StockMonitor(pool);
  if (config.adminNumbers) await adminRepository.seedFromCsv(config.adminNumbers);
  const rateLimiter=new GroupRateLimiter({limit:config.groupRateLimit,windowMs:config.groupRateWindowMinutes*60*1000});
- const messageHandler=createMessageHandler({allocationService,categoryRepository,calculationRepository,stockMonitor,lowStockAlertGroupId:config.lowStockAlertGroupId,pool,isAdmin:adminRepository.isAllowed.bind(adminRepository),rateLimiter,maxCodesPerRequest:config.maxCodesPerRequest,tagDelayMinSeconds:config.tagResponseDelayMinSeconds,tagDelayMaxSeconds:config.tagResponseDelayMaxSeconds,logger});
+ const messageHandler=createMessageHandler({allocationService,categoryRepository,calculationRepository,stockMonitor,lowStockAlertGroupId:config.lowStockAlertGroupId,calculationReportGroupId:config.calculationReportGroupId,pool,isAdmin:adminRepository.isAllowed.bind(adminRepository),rateLimiter,maxCodesPerRequest:config.maxCodesPerRequest,tagDelayMinSeconds:config.tagResponseDelayMinSeconds,tagDelayMaxSeconds:config.tagResponseDelayMaxSeconds,logger});
  const bot=createWhatsAppBot({clientId:config.whatsappClientId,messageHandler,state:botState,logger,reconnectDelayMs:config.reconnectDelayMs});
  const app=createApp({pool,config,botState});const server=app.listen(config.port,()=>logger.info('HTTP server listening',{port:config.port}));
  await bot.initialize();
