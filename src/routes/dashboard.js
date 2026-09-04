@@ -9,6 +9,8 @@ const { importCodeLines } = require('../services/code-importer');
 const { AdminRepository } = require('../services/admin-repository');
 const { UsageReportingService } = require('../services/usage-reporting');
 const { GroupLimitRepository } = require('../services/group-limit-repository');
+const { CalculationRepository } = require('../services/calculation-repository');
+const { CalculateAccessRepository } = require('../services/calculate-access-repository');
 
 function table(headers, rows, className = '') {
   return `<div class="table-wrap ${escapeHtml(className)}"><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${headers.length}" class="empty-state">No records found</td></tr>`}</tbody></table></div>`;
@@ -84,6 +86,8 @@ function createDashboardRouter({ pool, config }) {
   const adminRepository = new AdminRepository(pool);
   const usageReporting = new UsageReportingService(pool);
   const groupLimits = new GroupLimitRepository(pool);
+  const calculationRepository = new CalculationRepository(pool);
+  const calculateAccessRepository = new CalculateAccessRepository(pool);
   router.use(ensureCsrf);
 
   router.get('/login', (req, res) => res.send(layout('Login', `<section class="card narrow login-card"><div class="eyebrow">SECURE NODE ACCESS</div><h1>Administrator login</h1><p class="muted">Authenticate to manage inventory and inspect the immutable event ledger.</p><form method="post" action="/login"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><label>Username<input name="username" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button>Connect to dashboard</button></form></section>`)));
@@ -298,6 +302,96 @@ function createDashboardRouter({ pool, config }) {
       const updated = await pool.query('UPDATE allowed_groups SET active=$2,updated_at=NOW() WHERE group_id=$1 RETURNING group_id', [req.body.group_id, active]);
       if (updated.rowCount) await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', [active ? 'group_enabled' : 'group_disabled', req.body.group_id]);
       res.redirect('/dashboard/groups');
+    } catch (error) { next(error); }
+  });
+
+  router.get('/dashboard/calculations', async (req, res, next) => {
+    try {
+      const calcGroups = await calculationRepository.listAllBalances();
+      const calcRows = calcGroups.map((group) => `<tr><td>${escapeHtml(group.group_name || '—')}</td><td><code>${escapeHtml(group.group_id)}</code></td><td class="metric">${escapeHtml(group.current_total)}</td><td>${badge(group.active ? 'active' : 'disabled')}</td><td><form method="post" action="/dashboard/calculations/groups/toggle"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}"><input type="hidden" name="active" value="${group.active ? 'false' : 'true'}"><button class="small-button ${group.active ? 'danger' : ''}">${group.active ? 'Disable' : 'Enable'}</button></form></td></tr>`);
+      const addCalcGroupForm = `
+        <section id="calc-group-add" class="card narrow group-add-card">
+          <div class="eyebrow">REGISTER CALCULATION GROUP</div>
+          <h2>Add a calculation group</h2>
+          <p class="muted">Enter the WhatsApp group ID and an optional display name. A disabled group keeps tracking balances in the background but is left out of the /calculate report.</p>
+          <form method="post" action="/dashboard/calculations/groups/add">
+            <input type="hidden" name="_csrf" value="${req.session.csrfToken}">
+            <label>Group name<input name="group_name" maxlength="100" placeholder="Customer group"></label>
+            <label>Group ID<input name="group_id" required maxlength="200" placeholder="120363...@g.us"></label>
+            <button type="submit">Add group</button>
+          </form>
+        </section>
+      `;
+
+      const accessGroups = await calculateAccessRepository.list();
+      const accessRows = accessGroups.map((group) => `<tr><td>${escapeHtml(group.group_name)}</td><td><code>${escapeHtml(group.group_id)}</code></td><td>${badge(group.active ? 'active' : 'disabled')}</td><td><form method="post" action="/dashboard/calculations/access/toggle"><input type="hidden" name="_csrf" value="${req.session.csrfToken}"><input type="hidden" name="group_id" value="${escapeHtml(group.group_id)}"><input type="hidden" name="active" value="${group.active ? 'false' : 'true'}"><button class="small-button ${group.active ? 'danger' : ''}">${group.active ? 'Disable' : 'Enable'}</button></form></td></tr>`);
+      const envNote = config.calculationReportGroupId
+        ? `<p class="muted">The env-configured group <code>${escapeHtml(config.calculationReportGroupId)}</code> (CALCULATION_REPORT_GROUP_ID) always has access, in addition to the list below.</p>`
+        : '<p class="muted">No CALCULATION_REPORT_GROUP_ID is configured; only groups verified below can send /calculate.</p>';
+      const addAccessForm = `
+        <section id="access-group-add" class="card narrow group-add-card">
+          <div class="eyebrow">VERIFY GROUP</div>
+          <h2>Allow a group to run /calculate</h2>
+          <p class="muted">Verified groups can send /calculate to view every calculation group's running total.</p>
+          <form method="post" action="/dashboard/calculations/access/add">
+            <input type="hidden" name="_csrf" value="${req.session.csrfToken}">
+            <label>Group name<input name="group_name" required maxlength="100" placeholder="Operations group"></label>
+            <label>Group ID<input name="group_id" required maxlength="200" placeholder="120363...@g.us"></label>
+            <button type="submit">Verify group</button>
+          </form>
+        </section>
+      `;
+
+      const content = `
+        <section class="hero compact"><div><div class="eyebrow">CALCULATOR</div><h1>Calculation groups</h1><p>Manage which groups' running totals appear in /calculate, and which groups may send the command.</p></div><a href="#calc-group-add" class="button">Add group</a></section>
+        ${addCalcGroupForm}
+        <section class="panel"><div class="section-heading"><div><div class="eyebrow">TRACKED GROUPS</div><h2>Calculation groups</h2></div></div>${table(['Name', 'Group ID', 'Running total', 'State', 'Action'], calcRows)}</section>
+        <section class="hero compact"><div><div class="eyebrow">REPORT ACCESS</div><h1>/calculate access</h1><p>Only verified groups (plus the env-configured report group) can send /calculate.</p></div><a href="#access-group-add" class="button">Verify group</a></section>
+        ${envNote}
+        ${addAccessForm}
+        <section class="panel"><div class="section-heading"><div><div class="eyebrow">VERIFIED GROUPS</div><h2>/calculate access list</h2></div></div>${table(['Name', 'Group ID', 'State', 'Action'], accessRows)}</section>
+      `;
+      res.send(layout('Calculations', content, req.session.csrfToken));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/calculations/groups/add', verifyCsrf, async (req, res, next) => {
+    try {
+      const groupId = String(req.body.group_id || '').trim();
+      const groupName = String(req.body.group_name || '').trim();
+      if (!groupId) return res.status(400).send(layout('Group add failed', `<section class="card narrow"><h1>Invalid group details</h1><p class="muted">Group ID is required.</p><a class="button" href="/dashboard/calculations">Return to calculations</a></section>`, req.session.csrfToken));
+      await calculationRepository.addOrUpdateGroup(groupId, groupName, true);
+      await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', ['calc_group_registered', groupId]);
+      res.redirect('/dashboard/calculations');
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/calculations/groups/toggle', verifyCsrf, async (req, res, next) => {
+    try {
+      const active = req.body.active === 'true';
+      await calculationRepository.setActive(req.body.group_id, active);
+      await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', [active ? 'calc_group_enabled' : 'calc_group_disabled', req.body.group_id]);
+      res.redirect('/dashboard/calculations');
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/calculations/access/add', verifyCsrf, async (req, res, next) => {
+    try {
+      const groupId = String(req.body.group_id || '').trim();
+      const groupName = String(req.body.group_name || '').trim();
+      if (!groupId || !groupName) return res.status(400).send(layout('Group add failed', `<section class="card narrow"><h1>Invalid group details</h1><p class="muted">Both group ID and name are required.</p><a class="button" href="/dashboard/calculations">Return to calculations</a></section>`, req.session.csrfToken));
+      await calculateAccessRepository.set(groupId, groupName, true);
+      await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', ['calc_access_registered', groupId]);
+      res.redirect('/dashboard/calculations');
+    } catch (error) { next(error); }
+  });
+
+  router.post('/dashboard/calculations/access/toggle', verifyCsrf, async (req, res, next) => {
+    try {
+      const active = req.body.active === 'true';
+      await calculateAccessRepository.toggle(req.body.group_id, active);
+      await pool.query('INSERT INTO audit_logs(action,group_id) VALUES($1,$2)', [active ? 'calc_access_enabled' : 'calc_access_disabled', req.body.group_id]);
+      res.redirect('/dashboard/calculations');
     } catch (error) { next(error); }
   });
 

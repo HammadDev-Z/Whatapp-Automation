@@ -59,9 +59,39 @@ class CalculationRepository {
     );
   }
 
+  async addOrUpdateGroup(groupId, groupName, active = true) {
+    const name = String(groupName || '').trim().slice(0, 100) || null;
+    await this.pool.query(
+      `INSERT INTO calculation_balances(group_id, current_total, group_name, active)
+       VALUES($1, 0, $2, $3)
+       ON CONFLICT(group_id) DO UPDATE SET
+         group_name=COALESCE($2, calculation_balances.group_name),
+         active=$3,
+         updated_at=NOW()`,
+      [groupId, name, active]
+    );
+  }
+
+  async setActive(groupId, active) {
+    return this.pool.query(
+      'UPDATE calculation_balances SET active=$2, updated_at=NOW() WHERE group_id=$1',
+      [groupId, active]
+    );
+  }
+
   async listBalances() {
     const result = await this.pool.query(
       `SELECT group_id, current_total, group_name
+       FROM calculation_balances
+       WHERE active = TRUE
+       ORDER BY COALESCE(group_name, group_id)`
+    );
+    return result.rows;
+  }
+
+  async listAllBalances() {
+    const result = await this.pool.query(
+      `SELECT group_id, current_total, group_name, active
        FROM calculation_balances
        ORDER BY COALESCE(group_name, group_id)`
     );

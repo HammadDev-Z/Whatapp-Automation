@@ -82,7 +82,7 @@ async function resolveGroupName(message) {
   }
 }
 
-function createMessageHandler({ allocationService, categoryRepository, calculationRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
+function createMessageHandler({ allocationService, categoryRepository, calculationRepository, calculateAccessRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
   const inFlight = new Set();
   const groupNameWarned = new Set();
 
@@ -144,9 +144,12 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         return;
       }
       if (command.name === 'calculate') {
-        // Restricted to one operator group configured via CALCULATION_REPORT_GROUP_ID.
+        // Allowed in the env-configured CALCULATION_REPORT_GROUP_ID group plus any
+        // group verified via the dashboard's Calculations > Report access list.
         // Anywhere else the command is silently ignored.
-        if (!calculationReportGroupId || groupId !== calculationReportGroupId) return;
+        const isReportGroup = Boolean(calculationReportGroupId) && groupId === calculationReportGroupId;
+        const isVerified = calculateAccessRepository ? await calculateAccessRepository.isAllowed(groupId) : false;
+        if (!isReportGroup && !isVerified) return;
         const balances = await calculationRepository.listBalances();
         await sleep(randomDelayMs(3, 6, random));
         if (!balances.length) { await message.reply('📊 No group calculations have been recorded yet.'); return; }
