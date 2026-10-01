@@ -135,8 +135,6 @@ Severity tags: **[bug]** wrong behavior · **[incomplete]** half-built / missing
   `'expression'`. Trim the CHECK constraint via a new migration, or start classifying.
 - [ ] **[incomplete]** Division by zero and `NUMERIC(20,2)` overflow both make the whole message
   silently non-responsive (returns `null` / DB error caught upstream). No feedback to the group.
-- [ ] **[incomplete]** Leading-sign expressions like `-5+3` are ignored (only single-term `+n` / `-n`
-  adjustments are accepted).
 
 ### `src/services/calculation-repository.js`
 - [ ] **[bug]** Not concurrency-safe: `balance_before` is read from the balance upsert, then a
@@ -263,6 +261,10 @@ Severity tags: **[bug]** wrong behavior · **[incomplete]** half-built / missing
 
 ## Done
 
+- **2026-10-01** — Calculations now accept a leading sign on expressions (`-32*4`, `-5+3`,
+  `+32*4`). The sign must touch the first number (`- 32*4` is still ignored) and applies to that
+  number only. A lone `-32` is still an `adjustment`. Files: `src/services/calculator.js`;
+  tests in `test/calculator.test.js`.
 - **2026-09-02** — `/calculate` group names: `message.getChat()` throws on the deployed
   WhatsApp Web build (`error: "r"`), so auto-detection can't be relied on. Added `/setname <name>`
   (admin, any group) and `/setname <id>@g.us <name>` (from the report group) →

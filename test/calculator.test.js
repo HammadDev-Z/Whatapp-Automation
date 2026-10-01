@@ -12,7 +12,15 @@ const cases = [
   ['90.29/3', '30.10'],
   ['90.38\u00f75', '18.08'],
   ['2560+32+487-273', '2806.00'],
-  ['2+3*4-10/5', '12.00']
+  ['2+3*4-10/5', '12.00'],
+  ['-32*4', '-128.00'],
+  ['-5+3', '-2.00'],
+  ['-10-20', '-30.00'],
+  ['-90/3', '-30.00'],
+  ['-2+3*4', '10.00'],
+  ['-.5*4', '-2.00'],
+  ['+32*4', '128.00'],
+  ['-32 * 4', '-128.00']
 ];
 
 for (const [expression, expected] of cases) {
@@ -32,6 +40,22 @@ test('does not use x or the multiplication sign as multiplication', () => {
   assert.equal(parseCalculation('5150x1'), null);
   assert.equal(parseCalculation('5150X1'), null);
   assert.equal(parseCalculation('5150\u00d71'), null);
+});
+
+test('keeps the original text for a signed expression', () => {
+  assert.equal(parseCalculation('  -32*4 ').expression, '-32*4');
+});
+
+test('single signed numbers stay adjustments', () => {
+  assert.deepEqual(parseCalculation('-32'), { expression: '-32', amount: '-32.00', type: 'adjustment' });
+});
+
+test('rejects malformed leading signs', () => {
+  assert.equal(parseCalculation('--32*4'), null);
+  assert.equal(parseCalculation('- 32*4'), null);
+  assert.equal(parseCalculation('-32*-4'), null);
+  assert.equal(parseCalculation('-32x4'), null);
+  assert.equal(parseCalculation('-10/0'), null);
 });
 
 test('rejects division by zero', () => {

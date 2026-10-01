@@ -7,12 +7,15 @@ const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
 // Multiplication deliberately accepts only `*`; plain `x` may be part of the
 // bot's inventory shorthand and must never be interpreted as arithmetic.
 const OPERATOR = '[+*/\\-\\u00f7]';
-const EXPRESSION_PATTERN = new RegExp(`^${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
+// An optional leading sign (no space) applies to the first number only, so
+// `-32*4` is (-32)*4 and `-5+3` is (-5)+3.
+const EXPRESSION_PATTERN = new RegExp(`^([+-]?)(${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+)$`);
 const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
 
-function evaluateExpression(text) {
+function evaluateExpression(text, sign = '') {
   const tokens = text.match(TOKEN_PATTERN);
-  const values = [new Decimal(tokens[0])];
+  const first = new Decimal(tokens[0]);
+  const values = [sign === '-' ? first.negated() : first];
   const operators = [];
   const precedence = { '+': 1, '-': 1, '*': 2, '/': 2, '\u00f7': 2 };
 
@@ -61,8 +64,9 @@ function parseCalculation(body) {
     };
   }
 
-  if (EXPRESSION_PATTERN.test(text)) {
-    const amount = evaluateExpression(text);
+  const expression = text.match(EXPRESSION_PATTERN);
+  if (expression) {
+    const amount = evaluateExpression(expression[2], expression[1]);
     if (!amount || !amount.isFinite()) return null;
     return {
       expression: text,

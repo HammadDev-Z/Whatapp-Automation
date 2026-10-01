@@ -26,18 +26,24 @@ npm run import-codes -- .\path\codes.csv   # CSV import (columns: category, code
 npm run groups -- detect|list|add <id> <name>|enable <id>|disable <id>
 ```
 
-Run a single test: `node --test test/calculator.test.js` (or `--test-name-pattern "<name>"`).
+Run a single test: `node --test test/calculate-command.test.js` (or `--test-name-pattern "<name>"`).
 
 The WhatsApp `LocalAuth` profile in `.wwebjs_auth/` cannot be opened twice. **Stop the
 bot before running `npm run groups -- detect`**, and never run two processes that log in.
 
 ### Test state discrepancy
 
-`npm test` currently only discovers `test/calculator.test.js`. The README and
+`npm test` discovers only `test/calculator.test.js` (parser math) and
+`test/calculate-command.test.js` (`/calculate`, `/setname`, group-name capture via the message
+handler with fake repos). None of them touch Postgres. The README and
 `scripts/run-db-integration.js` reference a `tests/` directory (`allocation.integration.test.js`,
 parsing/normalization/rate-limit suites, etc.) that is **not present in the repo**, so
 `npm run test:integration` fails as-is. If you add integration coverage, `run-db-integration.js`
 expects `tests/allocation.integration.test.js` and sets `RUN_DB_TESTS=1`.
+
+`pending_tasks.md` is the maintained backlog of known bugs, dead code and missing tests, organized
+by module. Check it before "fixing" something odd — it may already be documented — and move an
+item to its **Done** section (dated, with the files touched) when you finish it.
 
 ## Architecture
 
@@ -47,7 +53,10 @@ expects `tests/allocation.integration.test.js` and sets `RUN_DB_TESTS=1`.
 repository classes and services, builds the WhatsApp-agnostic message handler, starts the
 Express app, then initializes the bot. Everything is dependency-injected via `create*` factory
 functions and repo classes that take `pool` in their constructor — there are no module-level
-singletons for stateful things. Tests construct handlers/services directly with fakes.
+singletons for stateful things. Tests construct handlers/services directly with fakes. One
+exception: `createDashboardRouter` receives only `{ pool, config }` and builds its own repository
+instances, so dashboard-only repos (`GroupLimitRepository`, `UsageReportingService`) never appear in
+`index.js`.
 
 ### Message flow
 
@@ -58,16 +67,20 @@ handler is pure of WhatsApp internals except the `message` object and is the rea
 Two message kinds, checked in this order:
 
 1. **Calculations** (`src/services/calculator.js`): bare arithmetic like `10+20-5`, `90.38÷5`,
-   or a signed adjustment `+50` / `-12.5`. Maintains a running per-group balance
+   `-32*4` (a leading sign touching the first number applies to that number only), or a signed
+   adjustment `+50` / `-12.5`. Maintains a running per-group balance
    (`calculation_balances` / `calculation_transactions`, via `CalculationRepository`) and
    replies as "AWAN E-STORE". `decimal.js` for all money math. **`x` and `×` are deliberately
    NOT multiplication** — they belong to inventory shorthand; only `*` and `÷` multiply/divide.
 2. **Commands** (`src/utilities/commands.js` `parseCommand`): `/tag <cat> [Nx]`, shorthand
    `830x5` / `830 × 5`, `/help`, `/groupid`, `/stock [cat]`, `/status`, `/calculate`. Admin-only
-   commands (`groupid`, `stock`, `status`) check `AdminRepository` after resolving `@lid` senders
-   to real numbers. `/calculate` only responds in the single group whose ID equals
-   `CALCULATION_REPORT_GROUP_ID` (config `calculationReportGroupId`); it replies with every group's
-   running `calculation_balances.current_total` plus a grand total. Anywhere else it is ignored.
+   commands (`groupid`, `stock`, `status`, `setname`) check `AdminRepository` after resolving
+   `@lid` senders to real numbers. `/calculate` responds only in the group whose ID equals
+   `CALCULATION_REPORT_GROUP_ID` (config `calculationReportGroupId`) **or** any active row in
+   `calculate_access_groups` (`CalculateAccessRepository`, migration 013); anywhere else it is
+   silently ignored. It lists `current_total` for every `calculation_balances` row with
+   `active = TRUE` plus a grand total — disabling a group hides it from the report but it keeps
+   accumulating. Both lists are managed on Dashboard → Calculations.
    Calculations are not gated by `allowed_groups` — they run in any chat the bot is in — so the
    group's display name is stored in `calculation_balances.group_name` (migration 012) for
    `/calculate` to show. It is set two ways: best-effort auto from `message.getChat()` on each
@@ -104,7 +117,9 @@ Categories and aliases are DB rows (`code_categories`, `category_aliases`), not 
 user input with `normalizeCategory()` then `CategoryRepository.resolve(alias)`. Canonical set:
 `830, 2320, 5150, 13k, 27k, 56k, 68k, 224k, 1.4m` with aliases like `5k→5150`, `2$→68k`,
 `10$→1.4m`. The category display order is hardcoded as a `CASE` expression duplicated across
-`dashboard.js`, `category-repository.js`, and `usage-reporting.js` — update all of them together.
+`dashboard.js` (twice: bare and `cc.`-prefixed), `category-repository.js`, `usage-reporting.js`,
+and `group-limit-repository.js` — update all of them together. Low-stock thresholds are a separate
+hardcoded map in `stock-monitor.js` (no entries for `68k`/`224k`/`1.4m`, so those never alert).
 
 ### Limit windows — `src/services/limit-window.js`
 
