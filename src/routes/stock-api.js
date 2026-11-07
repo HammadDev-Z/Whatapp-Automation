@@ -24,16 +24,32 @@ function keyMatches(provided, expected) {
  * column (repeats are skipped, never duplicated) and the audit log all behave
  * exactly as for a dashboard import. Disabled (404) until STOCK_API_KEY is set.
  */
-function createStockApiRouter({ pool, config }) {
+function createStockApiRouter({ pool, config, maxFailures = 10, windowMs = 10 * 60 * 1000 }) {
   const router = express.Router();
+  // Failed-key throttle per client address: guessing the key is not practical.
+  const failures = new Map();
+  const blocked = (ip) => {
+    const entry = failures.get(ip);
+    if (!entry) return false;
+    if (Date.now() > entry.resetAt) { failures.delete(ip); return false; }
+    return entry.count >= maxFailures;
+  };
+  const recordFailure = (ip) => {
+    const entry = failures.get(ip);
+    if (!entry || Date.now() > entry.resetAt) failures.set(ip, { count: 1, resetAt: Date.now() + windowMs });
+    else entry.count += 1;
+  };
 
   router.post('/api/stock/import', express.json({ limit: '250kb' }), async (req, res) => {
     if (!config.stockApiKey) return res.status(404).json({ error: 'not_found' });
+    if (blocked(req.ip)) return res.status(429).json({ error: 'too_many_failed_attempts' });
     const header = req.get('authorization') || '';
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
     if (!token || !keyMatches(token, config.stockApiKey)) {
+      recordFailure(req.ip);
       return res.status(401).json({ error: 'unauthorized' });
     }
+    failures.delete(req.ip);
 
     const { category, codes } = req.body || {};
     if (

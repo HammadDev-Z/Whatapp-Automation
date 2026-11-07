@@ -76,6 +76,48 @@ test('requests without the right key are refused and import nothing', async () =
   });
 });
 
+test('repeated wrong keys get throttled, and the right key is refused while blocked', async () => {
+  const pool = fakePool();
+  const app = express();
+  app.use(createStockApiRouter({ pool, config: { stockApiKey: KEY }, maxFailures: 3 }));
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/api/stock/import`;
+  const send = (token) => fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ category: '830', codes: ['T1'] })
+  });
+  try {
+    for (let i = 0; i < 3; i += 1) assert.equal((await send('wrong')).status, 401);
+    assert.equal((await send('wrong')).status, 429);
+    assert.equal((await send(KEY)).status, 429); // blocked even with the right key, for the window
+    assert.equal(pool.stored.size, 0);
+  } finally { server.close(); }
+});
+
+test('a successful import clears earlier failed attempts', async () => {
+  const pool = fakePool();
+  const app = express();
+  app.use(createStockApiRouter({ pool, config: { stockApiKey: KEY }, maxFailures: 3 }));
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/api/stock/import`;
+  const send = (token, code) => fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ category: '830', codes: [code] })
+  });
+  try {
+    assert.equal((await send('wrong', 'A')).status, 401);
+    assert.equal((await send('wrong', 'A')).status, 401);
+    assert.equal((await send(KEY, 'A1')).status, 200);       // resets the counter
+    assert.equal((await send('wrong', 'A')).status, 401);
+    assert.equal((await send('wrong', 'A')).status, 401);
+    assert.equal((await send(KEY, 'A2')).status, 200);       // would be 429 without the reset
+  } finally { server.close(); }
+});
+
 test('the endpoint does not exist until STOCK_API_KEY is configured', async () => {
   await withServer({ stockApiKey: '' }, async ({ post, pool }) => {
     assert.equal((await post({ category: '830', codes: ['X1'] }, auth)).status, 404);
