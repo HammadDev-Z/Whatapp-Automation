@@ -58,6 +58,10 @@ exception: `createDashboardRouter` receives only `{ pool, config }` and builds i
 instances, so dashboard-only repos (`GroupLimitRepository`, `UsageReportingService`) never appear in
 `index.js`.
 
+### Stock import API
+
+`src/routes/stock-api.js`: `POST /api/stock/import` with `Authorization: Bearer <STOCK_API_KEY>` and JSON `{category, codes[]}` (max 1000), used by the Razer purchase bot. It reuses `importCodeLines`, so aliases (`5k` -> `5150`), duplicate skipping on the unique `code` column and the `code_imported` audit rows behave as for a dashboard import. It is mounted before the session middleware (no cookies, no CSRF; the key is the auth, compared in constant time) and answers 404 until `STOCK_API_KEY` is set (32+ characters, enforced at startup). Replies are JSON `{category, imported, skipped, failed}`; it never echoes codes. Covered by `test/stock-api.test.js`.
+
 ### Message flow
 
 `src/bot/client.js` (thin `whatsapp-web.js` wrapper: QR, auth/ready/disconnected events,

@@ -25,7 +25,8 @@ function loadConfig() {
     tagResponseDelayMaxSeconds: number('TAG_RESPONSE_DELAY_MAX_SECONDS', 10),
     lowStockAlertGroupId: String(process.env.LOW_STOCK_ALERT_GROUP_ID || '').trim(),
     calculationReportGroupId: String(process.env.CALCULATION_REPORT_GROUP_ID || '').trim(),
-    reconnectDelayMs: number('WHATSAPP_RECONNECT_DELAY_MS', 10000)
+    reconnectDelayMs: number('WHATSAPP_RECONNECT_DELAY_MS', 10000),
+    stockApiKey: String(process.env.STOCK_API_KEY || '').trim()
   };
   if (config.tagResponseDelayMaxSeconds < config.tagResponseDelayMinSeconds) {
     throw new Error('TAG_RESPONSE_DELAY_MAX_SECONDS must be greater than or equal to TAG_RESPONSE_DELAY_MIN_SECONDS');
@@ -41,6 +42,9 @@ function loadConfig() {
   }
   if (config.env === 'production' && config.sessionSecret.length < 32) {
     throw new Error('SESSION_SECRET must contain at least 32 characters in production');
+  }
+  if (config.stockApiKey && config.stockApiKey.length < 32) {
+    throw new Error('STOCK_API_KEY must contain at least 32 characters');
   }
   return config;
 }
