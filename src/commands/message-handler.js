@@ -4,7 +4,9 @@ const { parseCommand } = require('../utilities/commands');
 const { parseCalculation } = require('../services/calculator');
 const Decimal = require('decimal.js');
 
-const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock - all remaining stock (admin)\n/stock <category> - category stock (admin)\n/status - service status (admin)\n/setname <name> - label this group for /calculate (admin)';
+const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock - all remaining stock (admin)\n/stock <category> - category stock (admin)\n/status - service status (admin)\n/setname <name> - label this group for /calculate (admin)\n/pkr or /usdt - set this group\'s currency (admin)';
+
+const CURRENCY_EMOJI = { pkr: '👉', usdt: '💰' };
 
 function serializeWid(value) {
   if (!value) return '';
@@ -82,7 +84,7 @@ async function resolveGroupName(message) {
   }
 }
 
-function createMessageHandler({ allocationService, categoryRepository, calculationRepository, calculateAccessRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
+function createMessageHandler({ allocationService, categoryRepository, calculationRepository, calculateAccessRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', broadcastGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
   const inFlight = new Set();
   const groupNameWarned = new Set();
 
@@ -116,6 +118,7 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         const expressionLine = calculation.type === 'adjustment'
           ? formatAmount(calculation.amount)
           : `① ${calculation.expression}=${formatAmount(calculation.amount)}`;
+        const currencyEmoji = CURRENCY_EMOJI[result.currency] || CURRENCY_EMOJI.pkr;
         const responseLines = [
           'AWAN E-STORE',
           '',
@@ -123,7 +126,7 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           expressionLine,
           `Cur Total: ${formatAmount(calculation.amount)}`,
           '',
-          `All Total:${formatAmount(result.currentTotal)}`
+          `${currencyEmoji}All Total:${formatAmount(result.currentTotal)}`
         ];
         if (new Decimal(result.currentTotal).isZero()) {
           responseLines.push('', '✅ Thanks! All clear.');
@@ -158,7 +161,7 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         await message.reply(['📊 GROUP CALCULATION STATUS', '', ...lines, '', `Grand Total: ${formatAmount(grandTotal)}`].join('\n'));
         return;
       }
-      if (['groupid', 'stock', 'status', 'setname'].includes(command.name)) {
+      if (['groupid', 'stock', 'status', 'setname', 'currency', 'account'].includes(command.name)) {
         const adminSender = await resolveSender(message);
         const allowed = await Promise.resolve(isAdmin(adminSender));
         if (!allowed) {
@@ -171,6 +174,40 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         const target = command.targetGroupId || groupId;
         await calculationRepository.setGroupName(target, command.groupName);
         await message.reply(`✅ Saved "${command.groupName}"${command.targetGroupId ? ` for ${target}` : ''} — it will show in /calculate.`);
+        return;
+      }
+      if (command.name === 'currency') {
+        if (command.message) {
+          // Broadcast form — only fires from the one designated control group;
+          // anywhere else it's silently ignored, same as a malformed command.
+          if (!broadcastGroupId || groupId !== broadcastGroupId) return;
+          const targets = (await calculationRepository.listActiveGroupIds(command.currency))
+            .filter((targetGroupId) => targetGroupId !== groupId);
+          let sent = 0;
+          for (const targetGroupId of targets) {
+            try { await message.client.sendMessage(targetGroupId, command.message); sent += 1; }
+            catch (error) { logger.warn?.('Currency broadcast send failed', { targetGroupId, currency: command.currency, messageId, error }); }
+          }
+          await message.reply(`✅ Broadcast sent to ${sent} ${command.currency.toUpperCase()} group${sent === 1 ? '' : 's'}.`);
+          return;
+        }
+        // Label form — sets the currency for the group it was sent in.
+        await calculationRepository.setCurrency({ groupId, currency: command.currency });
+        await message.reply(`✅ Currency set to ${command.currency.toUpperCase()}`);
+        return;
+      }
+      if (command.name === 'account') {
+        // Only fires from the one designated control group, same as a currency broadcast.
+        if (!broadcastGroupId || groupId !== broadcastGroupId) return;
+        if (!command.message) { await message.reply('Usage: /account <message>   (send from the broadcast control group)'); return; }
+        const targets = (await calculationRepository.listActiveGroupIds())
+          .filter((targetGroupId) => targetGroupId !== groupId);
+        let sent = 0;
+        for (const targetGroupId of targets) {
+          try { await message.client.sendMessage(targetGroupId, command.message); sent += 1; }
+          catch (error) { logger.warn?.('Account broadcast send failed', { targetGroupId, messageId, error }); }
+        }
+        await message.reply(`✅ Account details sent to ${sent} group${sent === 1 ? '' : 's'}.`);
         return;
       }
       if (command.name === 'status') {

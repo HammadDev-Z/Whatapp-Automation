@@ -41,6 +41,16 @@ function parseCommand(body) {
     return { name: 'setname', groupName: rest.slice(0, 100) };
   }
   if (/^\/setname\s*$/i.test(text)) return { name: 'setname' };
+  match = text.match(/^\/(pkr|usdt)(?:\s+([\s\S]+))?$/i);
+  if (match) {
+    const rawMessage = match[2] ? match[2].trim() : '';
+    return { name: 'currency', currency: match[1].toLowerCase(), message: rawMessage || null };
+  }
+  match = text.match(/^\/account(?:\s+([\s\S]+))?$/i);
+  if (match) {
+    const rawMessage = match[1] ? match[1].trim() : '';
+    return { name: 'account', message: rawMessage || null };
+  }
   if (/^\/(?:tag|stock)\b/i.test(text) || INVALID_SHORTHAND_PATTERN.test(text)) return { name: 'invalid' };
   return null;
 }

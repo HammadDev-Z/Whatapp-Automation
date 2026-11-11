@@ -25,6 +25,7 @@ function loadConfig() {
     tagResponseDelayMaxSeconds: number('TAG_RESPONSE_DELAY_MAX_SECONDS', 10),
     lowStockAlertGroupId: String(process.env.LOW_STOCK_ALERT_GROUP_ID || '').trim(),
     calculationReportGroupId: String(process.env.CALCULATION_REPORT_GROUP_ID || '').trim(),
+    broadcastGroupId: String(process.env.BROADCAST_GROUP_ID || '').trim(),
     reconnectDelayMs: number('WHATSAPP_RECONNECT_DELAY_MS', 10000),
     stockApiKey: String(process.env.STOCK_API_KEY || '').trim()
   };
@@ -36,6 +37,9 @@ function loadConfig() {
   }
   if (config.calculationReportGroupId && !config.calculationReportGroupId.endsWith('@g.us')) {
     throw new Error('CALCULATION_REPORT_GROUP_ID must be a WhatsApp group ID ending in @g.us');
+  }
+  if (config.broadcastGroupId && !config.broadcastGroupId.endsWith('@g.us')) {
+    throw new Error('BROADCAST_GROUP_ID must be a WhatsApp group ID ending in @g.us');
   }
   if (config.env === 'production' && (!config.adminPassword || config.adminPassword.includes('replace-'))) {
     throw new Error('A strong ADMIN_PASSWORD is required in production');

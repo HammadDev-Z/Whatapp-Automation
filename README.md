@@ -79,6 +79,18 @@ The Inventory dashboard's **Reset all usage counters** button also starts a fres
 
 After a successful code delivery, the bot posts a low-stock alert only in the WhatsApp group configured by `LOW_STOCK_ALERT_GROUP_ID`. Thresholds are: `830`, `2320`, and `5150` below 10; `13k` below 4; and `27k` or `56k` below 2. Leave the setting empty to disable alerts.
 
+## Currency and broadcasts
+
+Every calculation group has a `currency` (`pkr` by default, or `usdt`), stored alongside its running balance. It only changes the receipt's "All Total" emoji (👉 for pkr, 💰 for usdt) — calculation parsing and the running total itself are unaffected.
+
+| Command | Where | Who | Result |
+|---|---|---|---|
+| `/pkr` or `/usdt` | Any group | Configured administrator | Labels *that* group's currency; replies `✅ Currency set to PKR`/`USDT` |
+| `/pkr <message>` or `/usdt <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Sends `<message>` to every active group currently labeled with that currency |
+| `/account <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Sends `<message>` to every active group regardless of currency |
+
+The broadcast forms (a currency command *with* trailing text, or `/account`) only fire from the single group set in `BROADCAST_GROUP_ID`; sent anywhere else, they're silently ignored — same as a malformed command. Disabled groups (Dashboard → Calculations) are skipped by both broadcast forms, matching `/calculate`. Leave `BROADCAST_GROUP_ID` empty to disable broadcasting entirely; the plain label form (`/pkr`/`/usdt` with no message) still works everywhere.
+
 ## CSV imports
 
 The only accepted columns are required `category` and `code` values (extra columns are ignored). Active categories are `830`, `2320`, `5150` (alias `5k`), `13k`, `27k`, `56k`, `68k` (alias `2$`), `224k` (alias `5$`), and `1.4m` (alias `10$`). Values are trimmed, aliases resolved, blank/invalid/unsupported rows rejected, duplicates within the file skipped, and existing database codes skipped. The import transaction either commits its inserts or rolls back on a database error. Reports show totals and row errors, never all code values.

@@ -29,7 +29,7 @@ class CalculationRepository {
         `UPDATE calculation_balances
          SET current_total=current_total+$2::numeric, updated_at=NOW()
          WHERE group_id=$1
-         RETURNING current_total`,
+         RETURNING current_total, currency`,
         [groupId, amount]
       );
       await client.query(
@@ -39,7 +39,7 @@ class CalculationRepository {
         [groupId, messageId, sender, expression, type, amount, balanceBefore, updated.rows[0].current_total]
       );
       await client.query('COMMIT');
-      return { duplicate: false, currentTotal: updated.rows[0].current_total };
+      return { duplicate: false, currentTotal: updated.rows[0].current_total, currency: updated.rows[0].currency };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -77,6 +77,30 @@ class CalculationRepository {
       'UPDATE calculation_balances SET active=$2, updated_at=NOW() WHERE group_id=$1',
       [groupId, active]
     );
+  }
+
+  // Upsert so a group with no balance row yet can still have a currency set.
+  // Never touches current_total; a null groupName never overwrites a stored one.
+  async setCurrency({ groupId, groupName = null, currency }) {
+    await this.pool.query(
+      `INSERT INTO calculation_balances(group_id, current_total, group_name, currency)
+       VALUES($1, 0, $2, $3)
+       ON CONFLICT(group_id) DO UPDATE SET
+         currency=$3,
+         group_name=COALESCE($2, calculation_balances.group_name),
+         updated_at=NOW()`,
+      [groupId, groupName, currency]
+    );
+  }
+
+  // Active groups to fan a broadcast out to. Pass a currency to restrict to
+  // that currency's groups (for /pkr and /usdt broadcasts), or omit it for
+  // every active group regardless of currency (for /account).
+  async listActiveGroupIds(currency = null) {
+    const result = currency
+      ? await this.pool.query('SELECT group_id FROM calculation_balances WHERE active=TRUE AND currency=$1', [currency])
+      : await this.pool.query('SELECT group_id FROM calculation_balances WHERE active=TRUE');
+    return result.rows.map((row) => row.group_id);
   }
 
   async listBalances() {
