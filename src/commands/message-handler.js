@@ -37,6 +37,21 @@ function randomDelayMs(minSeconds, maxSeconds, random = Math.random) {
   return (min + Math.floor(random() * (max - min + 1))) * 1000;
 }
 
+// Sends one group at a time with a random delay *between* sends (never before the
+// first one), so a broadcast doesn't fire a burst of messages all at once.
+// `items` is [{ groupId, text }] so each recipient can get different text (e.g. its
+// own pending balance) — pass the same text for every item for a flat broadcast.
+async function broadcastToGroups({ client, items, sleep, random, delayMinSeconds, delayMaxSeconds, logger, label, logContext = {} }) {
+  let sent = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    if (index > 0) await sleep(randomDelayMs(delayMinSeconds, delayMaxSeconds, random));
+    const { groupId: targetGroupId, text } = items[index];
+    try { await client.sendMessage(targetGroupId, text); sent += 1; }
+    catch (error) { logger.warn?.(`${label} send failed`, { targetGroupId, ...logContext, error }); }
+  }
+  return sent;
+}
+
 function formatAmount(value) {
   const fixed = new Decimal(value).toDecimalPlaces(2).toFixed(2);
   return fixed.endsWith('00') ? `${fixed.slice(0, -2)}0` : fixed;
@@ -84,7 +99,7 @@ async function resolveGroupName(message) {
   }
 }
 
-function createMessageHandler({ allocationService, categoryRepository, calculationRepository, calculateAccessRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', broadcastGroupId = '', pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
+function createMessageHandler({ allocationService, categoryRepository, calculationRepository, calculateAccessRepository, stockMonitor, lowStockAlertGroupId = '', calculationReportGroupId = '', broadcastGroupId = '', broadcastDelayMinSeconds = 10, broadcastDelayMaxSeconds = 15, pool, isAdmin, rateLimiter, maxCodesPerRequest = 50, tagDelayMinSeconds = 5, tagDelayMaxSeconds = 10, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, logger }) {
   const inFlight = new Set();
   const groupNameWarned = new Set();
 
@@ -183,11 +198,12 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           if (!broadcastGroupId || groupId !== broadcastGroupId) return;
           const targets = (await calculationRepository.listActiveGroupIds(command.currency))
             .filter((targetGroupId) => targetGroupId !== groupId);
-          let sent = 0;
-          for (const targetGroupId of targets) {
-            try { await message.client.sendMessage(targetGroupId, command.message); sent += 1; }
-            catch (error) { logger.warn?.('Currency broadcast send failed', { targetGroupId, currency: command.currency, messageId, error }); }
-          }
+          const items = targets.map((targetGroupId) => ({ groupId: targetGroupId, text: command.message }));
+          const sent = await broadcastToGroups({
+            client: message.client, items, sleep, random,
+            delayMinSeconds: broadcastDelayMinSeconds, delayMaxSeconds: broadcastDelayMaxSeconds,
+            logger, label: 'Currency broadcast', logContext: { currency: command.currency, messageId }
+          });
           await message.reply(`✅ Broadcast sent to ${sent} ${command.currency.toUpperCase()} group${sent === 1 ? '' : 's'}.`);
           return;
         }
@@ -200,13 +216,19 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         // Only fires from the one designated control group, same as a currency broadcast.
         if (!broadcastGroupId || groupId !== broadcastGroupId) return;
         if (!command.message) { await message.reply('Usage: /account <message>   (send from the broadcast control group)'); return; }
-        const targets = (await calculationRepository.listActiveGroupIds())
-          .filter((targetGroupId) => targetGroupId !== groupId);
-        let sent = 0;
-        for (const targetGroupId of targets) {
-          try { await message.client.sendMessage(targetGroupId, command.message); sent += 1; }
-          catch (error) { logger.warn?.('Account broadcast send failed', { targetGroupId, messageId, error }); }
-        }
+        // Personalized per group: each recipient's own pending balance is appended,
+        // so this uses listBalances() (which carries current_total), not listActiveGroupIds().
+        const balances = (await calculationRepository.listBalances())
+          .filter((row) => row.group_id !== groupId);
+        const items = balances.map((row) => ({
+          groupId: row.group_id,
+          text: `${command.message}\n\nYour pending balance: ${formatAmount(row.current_total)}`
+        }));
+        const sent = await broadcastToGroups({
+          client: message.client, items, sleep, random,
+          delayMinSeconds: broadcastDelayMinSeconds, delayMaxSeconds: broadcastDelayMaxSeconds,
+          logger, label: 'Account broadcast', logContext: { messageId }
+        });
         await message.reply(`✅ Account details sent to ${sent} group${sent === 1 ? '' : 's'}.`);
         return;
       }
@@ -310,4 +332,4 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
   };
 }
 
-module.exports = { createMessageHandler, resolveSender, resolveGroupName, serializeMessageId, formatCodeList, randomDelayMs, HELP };
+module.exports = { createMessageHandler, resolveSender, resolveGroupName, serializeMessageId, formatCodeList, randomDelayMs, broadcastToGroups, HELP };

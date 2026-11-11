@@ -293,6 +293,38 @@ test('/pkr <message> from the broadcast group sends only to active pkr groups, e
   assert.deepEqual(replies, ['✅ Broadcast sent to 2 PKR groups.']);
 });
 
+test('a broadcast waits a random delay between sends, never before the first one', async () => {
+  const sent = [];
+  const sleepCalls = [];
+  const replies = [];
+  const handler = createMessageHandler({
+    allocationService: {},
+    categoryRepository: {},
+    calculationRepository: {
+      listBalances: async () => [],
+      listActiveGroupIds: async () => ['a@g.us', 'b@g.us', 'c@g.us']
+    },
+    stockMonitor: null,
+    pool: {},
+    isAdmin: async () => true,
+    rateLimiter: { consume: () => true },
+    calculationReportGroupId: REPORT_GROUP,
+    broadcastGroupId: BROADCAST_GROUP,
+    broadcastDelayMinSeconds: 10,
+    broadcastDelayMaxSeconds: 15,
+    sleep: async (ms) => { sleepCalls.push(ms); },
+    random: () => 0,
+    logger: { info() {}, warn() {}, error() {} }
+  });
+
+  await handler(broadcastMessage('/pkr hi testing', BROADCAST_GROUP, replies, sent));
+
+  assert.deepEqual(sent.map((item) => item.groupId), ['a@g.us', 'b@g.us', 'c@g.us']);
+  // 3 sends → 2 gaps between them, and none before the first send.
+  assert.equal(sleepCalls.length, 2);
+  assert.ok(sleepCalls.every((ms) => ms === 10000));
+});
+
 test('/usdt <message> from the broadcast group sends only to usdt groups', async () => {
   let requestedCurrency = null;
   const sent = [];
@@ -306,18 +338,34 @@ test('/usdt <message> from the broadcast group sends only to usdt groups', async
   assert.deepEqual(replies, ['✅ Broadcast sent to 1 USDT group.']);
 });
 
-test('/account <message> from the broadcast group sends to every active group regardless of currency', async () => {
-  let calledWithCurrency = 'not-called';
+test('/account <message> sends every active group its own pending balance, regardless of currency', async () => {
   const sent = [];
-  const { handler, replies } = buildHandler([], {
-    listActiveGroupIds: async (currency = null) => { calledWithCurrency = currency; return ['a@g.us', 'u@g.us']; }
-  }, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+  const { handler, replies } = buildHandler([
+    { group_id: 'a@g.us', group_name: 'A', current_total: '500.00' },
+    { group_id: 'u@g.us', group_name: 'U', current_total: '-120.00' }
+  ], {}, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
 
   await handler(broadcastMessage('/account Bank: ABC, IBAN: 123', BROADCAST_GROUP, replies, sent));
 
-  assert.equal(calledWithCurrency, null);
   assert.deepEqual(sent.map((item) => item.groupId).sort(), ['a@g.us', 'u@g.us']);
+  const toA = sent.find((item) => item.groupId === 'a@g.us');
+  const toU = sent.find((item) => item.groupId === 'u@g.us');
+  assert.equal(toA.text, 'Bank: ABC, IBAN: 123\n\nYour pending balance: 500.0');
+  assert.equal(toU.text, 'Bank: ABC, IBAN: 123\n\nYour pending balance: -120.0');
   assert.deepEqual(replies, ['✅ Account details sent to 2 groups.']);
+});
+
+test('/account excludes the broadcast group itself even if it has a balance row', async () => {
+  const sent = [];
+  const { handler, replies } = buildHandler([
+    { group_id: 'a@g.us', group_name: 'A', current_total: '500.00' },
+    { group_id: BROADCAST_GROUP, group_name: 'Control', current_total: '0.00' }
+  ], {}, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+
+  await handler(broadcastMessage('/account Bank: ABC', BROADCAST_GROUP, replies, sent));
+
+  assert.deepEqual(sent.map((item) => item.groupId), ['a@g.us']);
+  assert.deepEqual(replies, ['✅ Account details sent to 1 group.']);
 });
 
 test('/account with no message from the broadcast group gets a usage hint', async () => {

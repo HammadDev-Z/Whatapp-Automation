@@ -87,9 +87,13 @@ Every calculation group has a `currency` (`pkr` by default, or `usdt`), stored a
 |---|---|---|---|
 | `/pkr` or `/usdt` | Any group | Configured administrator | Labels *that* group's currency; replies `✅ Currency set to PKR`/`USDT` |
 | `/pkr <message>` or `/usdt <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Sends `<message>` to every active group currently labeled with that currency |
-| `/account <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Sends `<message>` to every active group regardless of currency |
+| `/account <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Sends `<message>` plus that group's own running balance to every active group, regardless of currency |
 
 The broadcast forms (a currency command *with* trailing text, or `/account`) only fire from the single group set in `BROADCAST_GROUP_ID`; sent anywhere else, they're silently ignored — same as a malformed command. Disabled groups (Dashboard → Calculations) are skipped by both broadcast forms, matching `/calculate`. Leave `BROADCAST_GROUP_ID` empty to disable broadcasting entirely; the plain label form (`/pkr`/`/usdt` with no message) still works everywhere.
+
+A broadcast sends to one group at a time, waiting a random delay (`BROADCAST_DELAY_MIN_SECONDS`–`BROADCAST_DELAY_MAX_SECONDS`, default 10–15s) *between* each send — never before the first one — so it never fires as an instant burst to every group at once.
+
+Every group defaults to `pkr` the moment it first appears in `calculation_balances` (including groups that existed before this feature shipped). `/pkr` broadcasts will reach any group you haven't explicitly labeled `/usdt` — label your real USDT groups to carve them out.
 
 ## CSV imports
 
