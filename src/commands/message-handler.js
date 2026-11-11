@@ -39,14 +39,21 @@ function randomDelayMs(minSeconds, maxSeconds, random = Math.random) {
 
 // Sends one group at a time with a random delay *between* sends (never before the
 // first one), so a broadcast doesn't fire a burst of messages all at once.
-// `items` is [{ groupId, text }] so each recipient can get different text (e.g. its
-// own pending balance) — pass the same text for every item for a flat broadcast.
-async function broadcastToGroups({ client, items, sleep, random, delayMinSeconds, delayMaxSeconds, logger, label, logContext = {} }) {
+// `targets` is a flat list of group IDs; `buildText(targetGroupId)` is called right
+// before each send so per-recipient content (e.g. a pending balance) is read fresh at
+// send time, not from a snapshot taken when the whole broadcast started — with many
+// groups and a 10-15s gap between each, that snapshot can be minutes stale by the
+// time a later group's turn comes up.
+async function broadcastToGroups({ client, targets, buildText, sleep, random, delayMinSeconds, delayMaxSeconds, logger, label, logContext = {} }) {
   let sent = 0;
-  for (let index = 0; index < items.length; index += 1) {
+  for (let index = 0; index < targets.length; index += 1) {
     if (index > 0) await sleep(randomDelayMs(delayMinSeconds, delayMaxSeconds, random));
-    const { groupId: targetGroupId, text } = items[index];
-    try { await client.sendMessage(targetGroupId, text); sent += 1; }
+    const targetGroupId = targets[index];
+    try {
+      const text = await buildText(targetGroupId);
+      await client.sendMessage(targetGroupId, text);
+      sent += 1;
+    }
     catch (error) { logger.warn?.(`${label} send failed`, { targetGroupId, ...logContext, error }); }
   }
   return sent;
@@ -198,9 +205,8 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           if (!broadcastGroupId || groupId !== broadcastGroupId) return;
           const targets = (await calculationRepository.listActiveGroupIds(command.currency))
             .filter((targetGroupId) => targetGroupId !== groupId);
-          const items = targets.map((targetGroupId) => ({ groupId: targetGroupId, text: command.message }));
           const sent = await broadcastToGroups({
-            client: message.client, items, sleep, random,
+            client: message.client, targets, buildText: async () => command.message, sleep, random,
             delayMinSeconds: broadcastDelayMinSeconds, delayMaxSeconds: broadcastDelayMaxSeconds,
             logger, label: 'Currency broadcast', logContext: { currency: command.currency, messageId }
           });
@@ -215,21 +221,29 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
       if (command.name === 'account') {
         // Only fires from the one designated control group, same as a currency broadcast.
         if (!broadcastGroupId || groupId !== broadcastGroupId) return;
-        if (!command.message) { await message.reply('Usage: /account <message>   (send from the broadcast control group)'); return; }
-        // Personalized per group: each recipient's own pending balance is appended,
-        // so this uses listBalances() (which carries current_total), not listActiveGroupIds().
-        const balances = (await calculationRepository.listBalances())
-          .filter((row) => row.group_id !== groupId);
-        const items = balances.map((row) => ({
-          groupId: row.group_id,
-          text: `${command.message}\n\nYour pending balance: ${formatAmount(row.current_total)}`
-        }));
+        if (!command.message) { await message.reply('Usage: /account [pkr|usdt] <message>   (send from the broadcast control group)'); return; }
+        // Personalized per group: each recipient's own pending balance is appended.
+        // Only groups actually labeled via /pkr or /usdt are ever included; an
+        // unset group never receives a broadcast. An optional pkr/usdt prefix
+        // restricts this to just that currency's groups, same as /pkr and /usdt.
+        // The balance itself is re-read right before each send (buildText below),
+        // not taken from this initial list — see broadcastToGroups for why.
+        const targets = (await calculationRepository.listBalancesByCurrency(command.currency))
+          .map((row) => row.group_id)
+          .filter((targetGroupId) => targetGroupId !== groupId);
         const sent = await broadcastToGroups({
-          client: message.client, items, sleep, random,
+          client: message.client,
+          targets,
+          buildText: async (targetGroupId) => {
+            const currentTotal = await calculationRepository.getCurrentTotal(targetGroupId);
+            return `${command.message}\n\nYour pending balance: ${formatAmount(currentTotal)}`;
+          },
+          sleep, random,
           delayMinSeconds: broadcastDelayMinSeconds, delayMaxSeconds: broadcastDelayMaxSeconds,
-          logger, label: 'Account broadcast', logContext: { messageId }
+          logger, label: 'Account broadcast', logContext: { currency: command.currency, messageId }
         });
-        await message.reply(`✅ Account details sent to ${sent} group${sent === 1 ? '' : 's'}.`);
+        const scopeLabel = command.currency ? ` ${command.currency.toUpperCase()}` : '';
+        await message.reply(`✅ Account details sent to ${sent}${scopeLabel} group${sent === 1 ? '' : 's'}.`);
         return;
       }
       if (command.name === 'status') {

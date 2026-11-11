@@ -187,10 +187,16 @@ test('parseCommand recognizes /pkr and /usdt, bare and with a broadcast message'
   assert.equal(parseCommand('/pkrhello'), null);
 });
 
-test('parseCommand recognizes /account, bare and with a message', () => {
-  assert.deepEqual(parseCommand('/account'), { name: 'account', message: null });
-  assert.deepEqual(parseCommand('/account Bank: ABC, IBAN: 123'), { name: 'account', message: 'Bank: ABC, IBAN: 123' });
-  assert.deepEqual(parseCommand('  /ACCOUNT  '), { name: 'account', message: null });
+test('parseCommand recognizes /account, bare, with a message, and with an optional pkr/usdt filter', () => {
+  assert.deepEqual(parseCommand('/account'), { name: 'account', currency: null, message: null });
+  assert.deepEqual(parseCommand('/account Bank: ABC, IBAN: 123'),
+    { name: 'account', currency: null, message: 'Bank: ABC, IBAN: 123' });
+  assert.deepEqual(parseCommand('  /ACCOUNT  '), { name: 'account', currency: null, message: null });
+  assert.deepEqual(parseCommand('/account pkr Eid offer'), { name: 'account', currency: 'pkr', message: 'Eid offer' });
+  assert.deepEqual(parseCommand('/account USDT New rate'), { name: 'account', currency: 'usdt', message: 'New rate' });
+  assert.deepEqual(parseCommand('/account pkr'), { name: 'account', currency: 'pkr', message: null });
+  // "pkroffer" isn't the pkr keyword — no word boundary after "pkr" — so it's just message text.
+  assert.deepEqual(parseCommand('/account pkroffer'), { name: 'account', currency: null, message: 'pkroffer' });
 });
 
 test('/pkr from an admin sets the group currency and confirms', async () => {
@@ -338,16 +344,25 @@ test('/usdt <message> from the broadcast group sends only to usdt groups', async
   assert.deepEqual(replies, ['✅ Broadcast sent to 1 USDT group.']);
 });
 
-test('/account <message> sends every active group its own pending balance, regardless of currency', async () => {
+test('/account <message> sends every labeled active group its own freshly-read pending balance, regardless of currency', async () => {
+  let requestedCurrency = 'not-called';
+  const totals = { 'a@g.us': '500.00', 'u@g.us': '-120.00' };
+  const readFor = [];
   const sent = [];
-  const { handler, replies } = buildHandler([
-    { group_id: 'a@g.us', group_name: 'A', current_total: '500.00' },
-    { group_id: 'u@g.us', group_name: 'U', current_total: '-120.00' }
-  ], {}, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+  const { handler, replies } = buildHandler([], {
+    listBalancesByCurrency: async (currency) => {
+      requestedCurrency = currency;
+      return Object.keys(totals).map((group_id) => ({ group_id }));
+    },
+    getCurrentTotal: async (groupId) => { readFor.push(groupId); return totals[groupId]; }
+  }, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
 
   await handler(broadcastMessage('/account Bank: ABC, IBAN: 123', BROADCAST_GROUP, replies, sent));
 
+  assert.equal(requestedCurrency, null);
   assert.deepEqual(sent.map((item) => item.groupId).sort(), ['a@g.us', 'u@g.us']);
+  // The balance must be read per group at send time, not taken from the initial list.
+  assert.deepEqual(readFor.sort(), ['a@g.us', 'u@g.us']);
   const toA = sent.find((item) => item.groupId === 'a@g.us');
   const toU = sent.find((item) => item.groupId === 'u@g.us');
   assert.equal(toA.text, 'Bank: ABC, IBAN: 123\n\nYour pending balance: 500.0');
@@ -355,12 +370,79 @@ test('/account <message> sends every active group its own pending balance, regar
   assert.deepEqual(replies, ['✅ Account details sent to 2 groups.']);
 });
 
+test('a later group in the broadcast queue gets its balance as of send time, not as of when the broadcast started', async () => {
+  // Simulates a customer posting a calculation in 'b@g.us' while the broadcast is
+  // still working through 'a@g.us' earlier in the queue — the delay between sends
+  // (here, sleep() itself) is when that change happens.
+  const totals = { 'a@g.us': '100.00', 'b@g.us': '100.00' };
+  const sent = [];
+  const handler = createMessageHandler({
+    allocationService: {},
+    categoryRepository: {},
+    calculationRepository: {
+      listBalances: async () => [],
+      listBalancesByCurrency: async () => [{ group_id: 'a@g.us' }, { group_id: 'b@g.us' }],
+      getCurrentTotal: async (groupId) => totals[groupId]
+    },
+    stockMonitor: null,
+    pool: {},
+    isAdmin: async () => true,
+    rateLimiter: { consume: () => true },
+    calculationReportGroupId: REPORT_GROUP,
+    broadcastGroupId: BROADCAST_GROUP,
+    sleep: async () => { totals['b@g.us'] = '999.00'; },
+    random: () => 0,
+    logger: { info() {}, warn() {}, error() {} }
+  });
+
+  await handler(broadcastMessage('/account Bank: ABC', BROADCAST_GROUP, [], sent));
+
+  const toB = sent.find((item) => item.groupId === 'b@g.us');
+  assert.equal(toB.text, 'Bank: ABC\n\nYour pending balance: 999.0');
+});
+
+test('/account pkr <message> sends only to pkr-labeled groups, and the confirmation names the currency', async () => {
+  let requestedCurrency = 'not-called';
+  const sent = [];
+  const { handler, replies } = buildHandler([], {
+    listBalancesByCurrency: async (currency) => {
+      requestedCurrency = currency;
+      return [{ group_id: 'a@g.us' }];
+    },
+    getCurrentTotal: async () => '500.00'
+  }, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+
+  await handler(broadcastMessage('/account pkr Eid offer', BROADCAST_GROUP, replies, sent));
+
+  assert.equal(requestedCurrency, 'pkr');
+  assert.deepEqual(sent.map((item) => item.groupId), ['a@g.us']);
+  assert.equal(sent[0].text, 'Eid offer\n\nYour pending balance: 500.0');
+  assert.deepEqual(replies, ['✅ Account details sent to 1 PKR group.']);
+});
+
+test('/account usdt <message> sends only to usdt-labeled groups', async () => {
+  let requestedCurrency = 'not-called';
+  const sent = [];
+  const { handler, replies } = buildHandler([], {
+    listBalancesByCurrency: async (currency) => {
+      requestedCurrency = currency;
+      return [{ group_id: 'u@g.us' }, { group_id: 'u2@g.us' }];
+    },
+    getCurrentTotal: async () => '10.00'
+  }, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+
+  await handler(broadcastMessage('/account usdt New rate', BROADCAST_GROUP, replies, sent));
+
+  assert.equal(requestedCurrency, 'usdt');
+  assert.deepEqual(replies, ['✅ Account details sent to 2 USDT groups.']);
+});
+
 test('/account excludes the broadcast group itself even if it has a balance row', async () => {
   const sent = [];
-  const { handler, replies } = buildHandler([
-    { group_id: 'a@g.us', group_name: 'A', current_total: '500.00' },
-    { group_id: BROADCAST_GROUP, group_name: 'Control', current_total: '0.00' }
-  ], {}, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+  const { handler, replies } = buildHandler([], {
+    listBalancesByCurrency: async () => [{ group_id: 'a@g.us' }, { group_id: BROADCAST_GROUP }],
+    getCurrentTotal: async () => '500.00'
+  }, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
 
   await handler(broadcastMessage('/account Bank: ABC', BROADCAST_GROUP, replies, sent));
 

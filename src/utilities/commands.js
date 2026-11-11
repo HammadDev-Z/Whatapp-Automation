@@ -46,10 +46,11 @@ function parseCommand(body) {
     const rawMessage = match[2] ? match[2].trim() : '';
     return { name: 'currency', currency: match[1].toLowerCase(), message: rawMessage || null };
   }
-  match = text.match(/^\/account(?:\s+([\s\S]+))?$/i);
+  match = text.match(/^\/account(?:\s+(pkr|usdt)\b)?(?:\s+([\s\S]+))?$/i);
   if (match) {
-    const rawMessage = match[1] ? match[1].trim() : '';
-    return { name: 'account', message: rawMessage || null };
+    const currency = match[1] ? match[1].toLowerCase() : null;
+    const rawMessage = match[2] ? match[2].trim() : '';
+    return { name: 'account', currency, message: rawMessage || null };
   }
   if (/^\/(?:tag|stock)\b/i.test(text) || INVALID_SHORTHAND_PATTERN.test(text)) return { name: 'invalid' };
   return null;

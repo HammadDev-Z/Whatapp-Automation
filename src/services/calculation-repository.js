@@ -96,11 +96,35 @@ class CalculationRepository {
   // Active groups to fan a broadcast out to. Pass a currency to restrict to
   // that currency's groups (for /pkr and /usdt broadcasts), or omit it for
   // every active group regardless of currency (for /account).
+  // currency='pkr'/'usdt' naturally excludes unset (NULL) groups via the equality
+  // check; this is never called with no currency in practice.
   async listActiveGroupIds(currency = null) {
     const result = currency
       ? await this.pool.query('SELECT group_id FROM calculation_balances WHERE active=TRUE AND currency=$1', [currency])
       : await this.pool.query('SELECT group_id FROM calculation_balances WHERE active=TRUE');
     return result.rows.map((row) => row.group_id);
+  }
+
+  // The live current_total for one group, read fresh. Used right before each
+  // /account send (not from an earlier bulk snapshot) so a broadcast spread over many
+  // delayed sends never reports a balance that's gone stale by the time it's sent.
+  async getCurrentTotal(groupId) {
+    const result = await this.pool.query('SELECT current_total FROM calculation_balances WHERE group_id=$1', [groupId]);
+    return result.rows[0]?.current_total ?? '0';
+  }
+
+  // Balances (with current_total, for the /account personalization) of active groups
+  // that have actually been labeled pkr or usdt. Pass a currency to restrict to that
+  // one; omit it (or pass null) for every labeled group regardless of which currency.
+  // A group that never had /pkr or /usdt run in it (currency IS NULL) is always excluded.
+  async listBalancesByCurrency(currency = null) {
+    const result = await this.pool.query(
+      `SELECT group_id, current_total FROM calculation_balances
+       WHERE active = TRUE AND currency IS NOT NULL
+         AND ($1::text IS NULL OR currency = $1)`,
+      [currency]
+    );
+    return result.rows;
   }
 
   async listBalances() {
