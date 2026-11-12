@@ -79,6 +79,16 @@ class CalculationRepository {
     );
   }
 
+  // Resets a group back to unset (NULL) — it immediately stops being included in
+  // any /pkr, /usdt, or /account broadcast. A no-op if the group has no balance
+  // row at all, since that's already the same "unset" end state.
+  async clearCurrency(groupId) {
+    await this.pool.query(
+      'UPDATE calculation_balances SET currency=NULL, updated_at=NOW() WHERE group_id=$1',
+      [groupId]
+    );
+  }
+
   // Upsert so a group with no balance row yet can still have a currency set.
   // Never touches current_total; a null groupName never overwrites a stored one.
   async setCurrency({ groupId, groupName = null, currency }) {

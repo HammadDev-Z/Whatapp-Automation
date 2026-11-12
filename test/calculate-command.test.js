@@ -223,6 +223,57 @@ test('/usdt from an admin, mixed case and extra whitespace, sets the currency an
   assert.deepEqual(replies, ['✅ Currency set to USDT']);
 });
 
+test('parseCommand recognizes /null, bare only', () => {
+  assert.deepEqual(parseCommand('/null'), { name: 'resetcurrency' });
+  assert.deepEqual(parseCommand('  /NULL \n'), { name: 'resetcurrency' });
+  assert.equal(parseCommand('/null foo'), null);
+  assert.equal(parseCommand('null'), null);
+});
+
+test('/null from an admin resets the group currency and confirms', async () => {
+  let clearedGroupId = null;
+  const { handler, replies } = buildHandler([], {
+    clearCurrency: async (groupId) => { clearedGroupId = groupId; }
+  }, { isAdmin: async () => true });
+
+  await handler(message('/null', 'khan@g.us', replies));
+
+  assert.equal(clearedGroupId, 'khan@g.us');
+  assert.deepEqual(replies, ['✅ Currency unset — this group will no longer receive /pkr, /usdt, or /account broadcasts.']);
+});
+
+test('/null is refused for non-admins', async () => {
+  let called = false;
+  const { handler, replies } = buildHandler([], {
+    clearCurrency: async () => { called = true; }
+  }, { isAdmin: async () => false });
+
+  await handler(message('/null', 'khan@g.us', replies));
+
+  assert.equal(called, false);
+  assert.match(replies[0], /administrator/i);
+});
+
+test('a group reset with /null is excluded from the next /pkr broadcast', async () => {
+  // Simulates: /pkr label it, /null reset it, then a /pkr broadcast from the control
+  // group — the reset group must not be a target, since listActiveGroupIds only
+  // ever returns currency-matched rows and /null nulled this one out.
+  let cleared = false;
+  const sent = [];
+  const { handler, replies } = buildHandler([], {
+    clearCurrency: async () => { cleared = true; },
+    listActiveGroupIds: async () => cleared ? [] : ['khan@g.us']
+  }, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+
+  await handler(message('/null', 'khan@g.us', []));
+  assert.equal(cleared, true);
+
+  await handler(broadcastMessage('/pkr Eid offer', BROADCAST_GROUP, replies, sent));
+
+  assert.equal(sent.length, 0);
+  assert.deepEqual(replies, ['✅ Broadcast sent to 0 PKR groups.']);
+});
+
 test('invalid currency forms are ignored and get no reply', async () => {
   let called = false;
   const { handler, replies } = buildHandler([], {

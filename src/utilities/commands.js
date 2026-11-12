@@ -41,6 +41,7 @@ function parseCommand(body) {
     return { name: 'setname', groupName: rest.slice(0, 100) };
   }
   if (/^\/setname\s*$/i.test(text)) return { name: 'setname' };
+  if (/^\/null\s*$/i.test(text)) return { name: 'resetcurrency' };
   match = text.match(/^\/(pkr|usdt)(?:\s+([\s\S]+))?$/i);
   if (match) {
     const rawMessage = match[2] ? match[2].trim() : '';

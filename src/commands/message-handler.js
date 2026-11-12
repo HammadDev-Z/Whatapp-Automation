@@ -4,7 +4,7 @@ const { parseCommand } = require('../utilities/commands');
 const { parseCalculation } = require('../services/calculator');
 const Decimal = require('decimal.js');
 
-const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock - all remaining stock (admin)\n/stock <category> - category stock (admin)\n/status - service status (admin)\n/setname <name> - label this group for /calculate (admin)\n/pkr or /usdt - set this group\'s currency (admin)';
+const HELP = 'Commands:\n/tag <category> [quantityx] - request one or more codes\n<category> x <quantity> - quantity shorthand (example: 2320x5)\n/help - show this help\n/groupid - show group ID (admin)\n/stock - all remaining stock (admin)\n/stock <category> - category stock (admin)\n/status - service status (admin)\n/setname <name> - label this group for /calculate (admin)\n/pkr or /usdt - set this group\'s currency (admin)\n/null - unset this group\'s currency (admin)';
 
 const CURRENCY_EMOJI = { pkr: '👉', usdt: '💰' };
 
@@ -183,7 +183,7 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         await message.reply(['📊 GROUP CALCULATION STATUS', '', ...lines, '', `Grand Total: ${formatAmount(grandTotal)}`].join('\n'));
         return;
       }
-      if (['groupid', 'stock', 'status', 'setname', 'currency', 'account'].includes(command.name)) {
+      if (['groupid', 'stock', 'status', 'setname', 'currency', 'account', 'resetcurrency'].includes(command.name)) {
         const adminSender = await resolveSender(message);
         const allowed = await Promise.resolve(isAdmin(adminSender));
         if (!allowed) {
@@ -216,6 +216,11 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
         // Label form — sets the currency for the group it was sent in.
         await calculationRepository.setCurrency({ groupId, currency: command.currency });
         await message.reply(`✅ Currency set to ${command.currency.toUpperCase()}`);
+        return;
+      }
+      if (command.name === 'resetcurrency') {
+        await calculationRepository.clearCurrency(groupId);
+        await message.reply('✅ Currency unset — this group will no longer receive /pkr, /usdt, or /account broadcasts.');
         return;
       }
       if (command.name === 'account') {

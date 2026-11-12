@@ -86,6 +86,7 @@ Every calculation group has a `currency` — `pkr`, `usdt`, or unset (`NULL`) un
 | Command | Where | Who | Result |
 |---|---|---|---|
 | `/pkr` or `/usdt` | Any group | Configured administrator | Labels *that* group's currency; replies `✅ Currency set to PKR`/`USDT` |
+| `/null` | Any group | Configured administrator | Resets *that* group's currency back to unset — it stops receiving any broadcast until labeled again |
 | `/pkr <message>` or `/usdt <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Sends `<message>` to every active group labeled with that currency |
 | `/account <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Sends `<message>` plus that group's own running balance to every active, currency-labeled group (pkr and usdt both) |
 | `/account pkr <message>` or `/account usdt <message>` | Only the `BROADCAST_GROUP_ID` group | Configured administrator | Same as above, restricted to just that currency's labeled groups |
