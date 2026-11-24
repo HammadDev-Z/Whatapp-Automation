@@ -452,6 +452,50 @@ test('a later group in the broadcast queue gets its balance as of send time, not
   assert.equal(toB.text, 'Bank: ABC\n\nYour pending balance: 999.0');
 });
 
+test('/account skips a group whose balance is zero, and does not count it in the reply', async () => {
+  const totals = { 'a@g.us': '500.00', 'zero@g.us': '0.00' };
+  const sent = [];
+  const { handler, replies } = buildHandler([], {
+    listBalancesByCurrency: async () => [{ group_id: 'a@g.us' }, { group_id: 'zero@g.us' }],
+    getCurrentTotal: async (groupId) => totals[groupId]
+  }, { isAdmin: async () => true, broadcastGroupId: BROADCAST_GROUP });
+
+  await handler(broadcastMessage('/account Bank: ABC', BROADCAST_GROUP, replies, sent));
+
+  assert.deepEqual(sent.map((item) => item.groupId), ['a@g.us']);
+  assert.deepEqual(replies, ['✅ Account details sent to 1 group.']);
+});
+
+test('/account re-checks the balance at send time, so a group that cleared to zero during the delay is also skipped', async () => {
+  // 'b@g.us' is non-zero when the target list is built, but drops to zero during
+  // the delay before its own turn — it must still be skipped, since the check uses
+  // the fresh read, not whatever the balance was when the broadcast started.
+  const totals = { 'a@g.us': '500.00', 'b@g.us': '300.00' };
+  const sent = [];
+  const handler = createMessageHandler({
+    allocationService: {},
+    categoryRepository: {},
+    calculationRepository: {
+      listBalances: async () => [],
+      listBalancesByCurrency: async () => [{ group_id: 'a@g.us' }, { group_id: 'b@g.us' }],
+      getCurrentTotal: async (groupId) => totals[groupId]
+    },
+    stockMonitor: null,
+    pool: {},
+    isAdmin: async () => true,
+    rateLimiter: { consume: () => true },
+    calculationReportGroupId: REPORT_GROUP,
+    broadcastGroupId: BROADCAST_GROUP,
+    sleep: async () => { totals['b@g.us'] = '0.00'; },
+    random: () => 0,
+    logger: { info() {}, warn() {}, error() {} }
+  });
+
+  await handler(broadcastMessage('/account Bank: ABC', BROADCAST_GROUP, [], sent));
+
+  assert.deepEqual(sent.map((item) => item.groupId), ['a@g.us']);
+});
+
 test('/account pkr <message> sends only to pkr-labeled groups, and the confirmation names the currency', async () => {
   let requestedCurrency = 'not-called';
   const sent = [];

@@ -93,6 +93,8 @@ Every calculation group has a `currency` — `pkr`, `usdt`, or unset (`NULL`) un
 
 The broadcast forms (a currency command *with* trailing text, or `/account`) only fire from the single group set in `BROADCAST_GROUP_ID`; sent anywhere else, they're silently ignored — same as a malformed command. Disabled groups (Dashboard → Calculations) are skipped by every broadcast form, matching `/calculate`. Leave `BROADCAST_GROUP_ID` empty to disable broadcasting entirely; the plain label form (`/pkr`/`/usdt` with no message) still works everywhere.
 
+`/account` additionally skips any group whose balance is exactly zero at the moment it's about to be sent to — a group with nothing pending doesn't need a reminder, and this check uses the same fresh, send-time balance read described below (not the balance as of when the broadcast started), so a group that clears to zero mid-broadcast is still correctly skipped.
+
 A broadcast sends to one group at a time, waiting a random delay (`BROADCAST_DELAY_MIN_SECONDS`–`BROADCAST_DELAY_MAX_SECONDS`, default 10–15s) *between* each send — never before the first one — so it never fires as an instant burst to every group at once.
 
 ## CSV imports

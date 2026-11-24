@@ -43,7 +43,8 @@ function randomDelayMs(minSeconds, maxSeconds, random = Math.random) {
 // before each send so per-recipient content (e.g. a pending balance) is read fresh at
 // send time, not from a snapshot taken when the whole broadcast started — with many
 // groups and a 10-15s gap between each, that snapshot can be minutes stale by the
-// time a later group's turn comes up.
+// time a later group's turn comes up. buildText returning null/undefined skips that
+// group entirely — no send, no error, not counted in the returned total.
 async function broadcastToGroups({ client, targets, buildText, sleep, random, delayMinSeconds, delayMaxSeconds, logger, label, logContext = {} }) {
   let sent = 0;
   for (let index = 0; index < targets.length; index += 1) {
@@ -51,6 +52,7 @@ async function broadcastToGroups({ client, targets, buildText, sleep, random, de
     const targetGroupId = targets[index];
     try {
       const text = await buildText(targetGroupId);
+      if (text == null) continue;
       await client.sendMessage(targetGroupId, text);
       sent += 1;
     }
@@ -241,6 +243,11 @@ function createMessageHandler({ allocationService, categoryRepository, calculati
           targets,
           buildText: async (targetGroupId) => {
             const currentTotal = await calculationRepository.getCurrentTotal(targetGroupId);
+            // A group with nothing pending doesn't need an account reminder.
+            if (new Decimal(currentTotal).isZero()) {
+              logger.info?.('Account broadcast skipped a zero-balance group', { targetGroupId, messageId });
+              return null;
+            }
             return `${command.message}\n\nYour pending balance: ${formatAmount(currentTotal)}`;
           },
           sleep, random,
